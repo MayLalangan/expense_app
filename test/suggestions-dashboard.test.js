@@ -77,7 +77,7 @@ test('suggested purchases: statuses, totals and expense linking', async (t) => {
     assert.equal(r.status, 200);
     const u = await ed.post(`${S}/${stove.id}/unlink-expense`, { version: r.body.record.version });
     assert.equal(u.status, 200);
-    assert.equal(u.body.record.purchaseStatus, 'planned');
+    assert.equal(u.body.record.purchaseStatus, 'purchased'); // still checked off
     assert.equal(u.body.record.expenseId, null);
   });
 
@@ -90,12 +90,15 @@ test('suggested purchases: statuses, totals and expense linking', async (t) => {
 
   await t.test('list filters by status', async () => {
     const purchased = (await ed.get(`${S}?purchaseStatus=purchased`)).body;
-    assert.deepEqual(purchased.items.map((i) => i.itemName), ['Tent']);
+    assert.deepEqual(purchased.items.map((i) => i.itemName).sort(), ['Stove', 'Tent']);
   });
 
   await t.test('cancelled suggestions are excluded from the estimate', async () => {
     const st = (await ed.get(`${S}/${stove.id}`)).body.record;
-    await ed.patch(`${S}/${stove.id}`, { version: st.version, purchaseStatus: 'cancelled' });
+    await ed.post(`${S}/${stove.id}/done`, { version: st.version, done: false });
+    assert.equal(computeTotals(db, gid).suggestionEstimateMinor, 40050);
+    const st2 = (await ed.get(`${S}/${stove.id}`)).body.record;
+    await ed.patch(`${S}/${stove.id}`, { version: st2.version, purchaseStatus: 'cancelled' });
     assert.equal(computeTotals(db, gid).suggestionEstimateMinor, 0);
   });
 });
@@ -135,4 +138,64 @@ test('dashboard calculations', async (t) => {
   assert.equal(d.balanceMinor, -80);
   assert.equal(d.utilizationPercent, 366.7);
   assert.deepEqual(computeTotals(db, ogid).expenseTotalMinor, 99900);
+});
+
+test('suggestions checklist: optional price, check off and uncheck', async (t) => {
+  const { app, db, cleanup } = makeApp();
+  t.after(cleanup);
+  const alice = await signUp(app, 'Alice');
+  const ed = await signUp(app, 'Ed');
+  const viewer = await signUp(app, 'Viewer');
+  const gid = await makeGroup(alice, [[ed, 'editor'], [viewer, 'viewer']]);
+  const S = `/api/groups/${gid}/suggestions`;
+
+  const rice = await ed.post(S, { itemName: 'Rice cooker' });
+  assert.equal(rice.status, 201, JSON.stringify(rice.body));
+  assert.equal(rice.body.record.expectedPriceMinor, null);
+  const cord = (await ed.post(S, { itemName: 'Extension cord', expectedPrice: '350'})).body.record;
+  assert.equal((await ed.post(S, { itemName: 'X', expectedPrice: 'abc' })).status, 400); // still validated when given
+
+  let d = computeTotals(db, gid);
+  assert.equal(d.suggestionEstimateMinor, 35000);
+  assert.equal(d.suggestionCount, 2);
+  assert.equal(d.suggestionUnpricedCount, 1);
+
+  await t.test('checking an item marks it done without creating an expense', async () => {
+    const r = await ed.post(`${S}/${cord.id}/done`, { version: cord.version, done: true });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.record.purchaseStatus, 'purchased');
+    assert.equal(r.body.record.expenseId, null);
+    d = computeTotals(db, gid);
+    assert.equal(d.suggestionEstimateMinor, 0);
+    assert.equal(d.expenseTotalMinor, 0);
+    assert.equal((await ed.post(`${S}/${cord.id}/done`, { version: cord.version, done: false })).status, 409); // stale version
+  });
+
+  await t.test('list sections by checklist state', async () => {
+    assert.deepEqual((await ed.get(`${S}?state=open`)).body.items.map((i) => i.itemName), ['Rice cooker']);
+    assert.deepEqual((await ed.get(`${S}?state=done`)).body.items.map((i) => i.itemName), ['Extension cord']);
+    assert.equal((await ed.get(`${S}?state=bogus`)).status, 400);
+  });
+
+  await t.test('unchecking restores the previous status', async () => {
+    const r0 = (await alice.patch(`${S}/${rice.body.record.id}`, { version: 1, purchaseStatus: 'approved' })).body.record;
+    const checked = (await ed.post(`${S}/${r0.id}/done`, { version: r0.version, done: true })).body.record;
+    const un = await ed.post(`${S}/${r0.id}/done`, { version: checked.version, done: false });
+    assert.equal(un.body.record.purchaseStatus, 'approved');
+    const history = (await ed.get(`${S}/${r0.id}`)).body.history.map((h) => h.action);
+    assert.deepEqual(history, ['created', 'updated', 'checked', 'unchecked']);
+  });
+
+  await t.test('a done item can still get a linked expense, and cannot be unchecked while linked', async () => {
+    const c = (await ed.get(`${S}/${cord.id}`)).body.record;
+    const link = await ed.post(`${S}/${cord.id}/link-expense`, { version: c.version, createExpense: { title: 'Extension cord', amount: '330', expenseDate: '2026-10-19' } });
+    assert.equal(link.status, 200, JSON.stringify(link.body));
+    assert.equal(computeTotals(db, gid).expenseTotalMinor, 33000);
+    assert.equal((await ed.post(`${S}/${cord.id}/done`, { version: link.body.record.version, done: false })).status, 409);
+  });
+
+  await t.test('viewers cannot check items off', async () => {
+    const r = (await ed.get(`${S}/${rice.body.record.id}`)).body.record;
+    assert.equal((await viewer.post(`${S}/${r.id}/done`, { version: r.version, done: true })).status, 403);
+  });
 });

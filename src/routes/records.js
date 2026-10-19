@@ -82,6 +82,10 @@ function recordsRouter({ db, config, fileStore, uploadMiddleware }) {
       for (const [key, col] of Object.entries(type.filters || {})) {
         if (typeof q[key] === 'string' && q[key] !== '') { where.push(`r.${col} = ?`); params.push(q[key]); }
       }
+      if (type.states && typeof q.state === 'string' && q.state) {
+        if (!type.states[q.state]) throw badRequest(`state must be one of ${Object.keys(type.states).join(', ')}.`);
+        where.push(type.states[q.state]);
+      }
       if (q.from) { where.push(`r.${type.dateColumn} >= ?`); params.push(String(q.from)); }
       if (q.to) { where.push(`r.${type.dateColumn} <= ?`); params.push(String(q.to)); }
       if (q.pendingDeletion === '1') where.push('dr.id IS NOT NULL');
@@ -188,7 +192,7 @@ function recordsRouter({ db, config, fileStore, uploadMiddleware }) {
           throw conflict('Someone else changed this record while you were editing. Reload to see the latest version.', { currentVersion: row.version });
         }
         if (typeKey === 'suggested_purchase' && values.purchase_status !== undefined) {
-          if (row.purchase_status === 'purchased' && values.purchase_status !== 'purchased') {
+          if (row.expense_id && values.purchase_status !== 'purchased') {
             throw conflict('This suggestion is linked to an expense. Unlink the expense before changing its status.');
           }
           if (values.purchase_status === 'approved' && row.purchase_status !== 'approved' && !can(m.role, 'approveSuggestion')) {
@@ -334,7 +338,7 @@ function recordsRouter({ db, config, fileStore, uploadMiddleware }) {
       const s = loadRecord(db, 'suggested_purchase', m.group_id, id);
       assertEditable(s, 'suggested_purchase');
       if (s.version !== version) throw conflict('Someone else changed this suggestion. Reload and try again.');
-      if (s.purchase_status === 'purchased') throw conflict('This suggestion is already linked to an expense.');
+      if (s.expense_id) throw conflict('This suggestion is already linked to an expense.');
       if (s.purchase_status === 'cancelled') throw conflict('Cancelled suggestions cannot be marked as purchased. Change the status first.');
       const now = nowIso();
       let eid;
@@ -356,12 +360,48 @@ function recordsRouter({ db, config, fileStore, uploadMiddleware }) {
                   WHERE id = ? AND version = ?`).run(eid, req.user.id, now, id, version);
       audit(db, {
         groupId: m.group_id, actorId: req.user.id, action: 'linked_expense', recordType: 'suggested_purchase', recordId: id,
-        details: { expenseId: eid, changes: { purchaseStatus: { old: s.purchase_status, new: 'purchased' } } },
+        details: s.purchase_status === 'purchased'
+          ? { expenseId: eid }
+          : { expenseId: eid, changes: { purchaseStatus: { old: s.purchase_status, new: 'purchased' } } },
       });
       audit(db, { groupId: m.group_id, actorId: req.user.id, action: 'linked_suggestion', recordType: 'expense', recordId: eid, details: { suggestionId: id } });
       return eid;
     });
     res.json({ record: mapRecord(sType, loadRecord(db, 'suggested_purchase', m.group_id, id)), expenseId });
+  }));
+
+  // Checklist tick. Checking marks the item done (purchased); unchecking restores
+  // the status it had before it was checked, taken from the audit history.
+  router.post(`/groups/:gid/${sType.path}/:id/done`, wrap((req, res) => {
+    const m = loadMembership(db, parseId(req.params.gid, 'group'), req.user.id);
+    assertCan(m, 'write');
+    const id = parseId(req.params.id);
+    const { version, done } = req.body || {};
+    if (!Number.isSafeInteger(version)) throw badRequest('version is required.');
+    if (typeof done !== 'boolean') throw badRequest('done must be true or false.');
+    transaction(db, () => {
+      const s = loadRecord(db, 'suggested_purchase', m.group_id, id);
+      assertEditable(s, 'suggested_purchase');
+      if (s.version !== version) throw conflict('Someone else changed this item. Reload and try again.', { currentVersion: s.version });
+      const isDone = s.purchase_status === 'purchased';
+      if (done === isDone) return;
+      let next = 'purchased';
+      if (!done) {
+        if (s.expense_id) throw conflict('This item is linked to an expense. Unlink the expense before unchecking it.');
+        const prev = db.prepare(`SELECT json_extract(details, '$.changes.purchaseStatus.old') AS old FROM audit_log
+                                 WHERE record_type = 'suggested_purchase' AND record_id = ?
+                                   AND json_extract(details, '$.changes.purchaseStatus.new') = 'purchased'
+                                 ORDER BY id DESC LIMIT 1`).get(id);
+        next = prev?.old && prev.old !== 'purchased' ? prev.old : 'suggested';
+      }
+      db.prepare(`UPDATE suggested_purchases SET purchase_status = ?, updated_by = ?, updated_at = ?, version = version + 1
+                  WHERE id = ? AND version = ?`).run(next, req.user.id, nowIso(), id, version);
+      audit(db, {
+        groupId: m.group_id, actorId: req.user.id, action: done ? 'checked' : 'unchecked', recordType: 'suggested_purchase', recordId: id,
+        details: { changes: { purchaseStatus: { old: s.purchase_status, new: next } } },
+      });
+    });
+    res.json({ record: mapRecord(sType, loadRecord(db, 'suggested_purchase', m.group_id, id)) });
   }));
 
   router.post(`/groups/:gid/${sType.path}/:id/unlink-expense`, wrap((req, res) => {
@@ -375,11 +415,12 @@ function recordsRouter({ db, config, fileStore, uploadMiddleware }) {
       assertEditable(s, 'suggested_purchase');
       if (s.version !== version) throw conflict('Someone else changed this suggestion. Reload and try again.');
       if (!s.expense_id) throw conflict('This suggestion is not linked to an expense.');
-      db.prepare(`UPDATE suggested_purchases SET purchase_status = 'planned', expense_id = NULL, updated_by = ?, updated_at = ?, version = version + 1
+      // The item stays checked off; only the link to the expense is removed.
+      db.prepare(`UPDATE suggested_purchases SET expense_id = NULL, updated_by = ?, updated_at = ?, version = version + 1
                   WHERE id = ?`).run(req.user.id, nowIso(), id);
       audit(db, {
         groupId: m.group_id, actorId: req.user.id, action: 'unlinked_expense', recordType: 'suggested_purchase', recordId: id,
-        details: { expenseId: s.expense_id, changes: { purchaseStatus: { old: 'purchased', new: 'planned' } } },
+        details: { expenseId: s.expense_id },
       });
       audit(db, { groupId: m.group_id, actorId: req.user.id, action: 'unlinked_suggestion', recordType: 'expense', recordId: s.expense_id, details: { suggestionId: id } });
     });

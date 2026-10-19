@@ -221,6 +221,8 @@ sign-out/redirect/sign-in)._
 -   [x] Create a dedicated Suggested Purchases section separate from
     actual expenses.
 -   [x] Require a product/item name and expected price.
+    _(Changed 2026-10-19 at user request: only the name is required; price
+    is optional.)_
 -   [x] Allow an optional target date, description/notes, and product
     URL.
 -   [x] Automatically record creator identity and server creation
@@ -228,10 +230,13 @@ sign-out/redirect/sign-in)._
 -   [x] Automatically record last editor and server modification
     timestamp.
 -   [x] Define and implement statuses: Suggested, Approved, Planned,
-    Purchased, and Cancelled. _(Approved requires approver role;
-    Purchased only via linking an expense.)_
+    Purchased, and Cancelled. _(Approved requires approver role.
+    2026-10-19: Suggestions are now a checklist — ticking an item marks it
+    Done (= Purchased) without needing an expense; unticking restores the
+    previous status. Linking an expense is optional. Migration 3.)_
 -   [x] Build a list with search, filtering, sorting, and status
-    visibility.
+    visibility. _(Checklist view with quick add, search, To get / Done /
+    Cancelled sections; table view keeps filters and sorting.)_
 -   [x] Display the estimated total for active suggestions.
 -   [x] Keep suggested-purchase amounts separate from actual expenses
     and available balance.

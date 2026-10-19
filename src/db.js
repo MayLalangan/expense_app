@@ -209,6 +209,32 @@ DROP TABLE groups;
 ALTER TABLE groups_new RENAME TO groups;
 `,
   },
+  {
+    id: 3,
+    name: 'suggestions checklist: optional price, done without an expense',
+    rebuild: true,
+    sql: `
+CREATE TABLE suggested_purchases_new (
+  id INTEGER PRIMARY KEY,
+  item_name TEXT NOT NULL CHECK (length(item_name) BETWEEN 1 AND 200),
+  expected_price_minor INTEGER CHECK (expected_price_minor IS NULL OR (typeof(expected_price_minor) = 'integer' AND expected_price_minor > 0 AND expected_price_minor <= 100000000000)),
+  target_date TEXT CHECK (target_date IS NULL OR ${DATE_CHECK('target_date')}),
+  notes TEXT CHECK (notes IS NULL OR length(notes) <= 2000),
+  product_url TEXT CHECK (product_url IS NULL OR (length(product_url) <= 2000 AND (product_url LIKE 'http://%' OR product_url LIKE 'https://%'))),
+  purchase_status TEXT NOT NULL DEFAULT 'suggested'
+    CHECK (purchase_status IN ('suggested', 'approved', 'planned', 'purchased', 'cancelled')),
+  expense_id INTEGER UNIQUE REFERENCES expenses(id),
+  ${RECORD_COLUMNS},
+  -- An item can be done (purchased) without an expense, but a linked expense implies done.
+  CHECK (expense_id IS NULL OR purchase_status = 'purchased'),
+  UNIQUE (group_id, client_request_id)
+);
+INSERT INTO suggested_purchases_new SELECT * FROM suggested_purchases;
+DROP TABLE suggested_purchases;
+ALTER TABLE suggested_purchases_new RENAME TO suggested_purchases;
+CREATE INDEX suggested_purchases_group ON suggested_purchases(group_id, status);
+`,
+  },
 ];
 
 function openDatabase(dbPath) {

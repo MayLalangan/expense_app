@@ -53,17 +53,23 @@ const RECORD_TYPES = {
     amountField: 'expectedPriceMinor',
     fields: [
       { key: 'itemName', column: 'item_name', kind: 'text', required: true, max: 200, label: 'Item' },
-      { key: 'expectedPriceMinor', input: 'expectedPrice', column: 'expected_price_minor', kind: 'money', required: true, label: 'Expected price' },
+      { key: 'expectedPriceMinor', input: 'expectedPrice', column: 'expected_price_minor', kind: 'money', label: 'Expected price' },
       { key: 'targetDate', column: 'target_date', kind: 'date', label: 'Target date' },
       { key: 'productUrl', column: 'product_url', kind: 'url', label: 'Product URL' },
       { key: 'notes', column: 'notes', kind: 'text', max: 2000, label: 'Notes' },
-      // "purchased" is only reachable through linking an expense.
+      // "purchased" (done) is set by checking the item off, not through this field.
       { key: 'purchaseStatus', column: 'purchase_status', kind: 'enum', values: ['suggested', 'approved', 'planned', 'cancelled'], label: 'Status', createDefault: 'suggested' },
     ],
     search: ['item_name', 'notes'],
     sorts: { date: 'target_date', amount: 'expected_price_minor', name: 'item_name', created: 'created_at', updated: 'updated_at' },
     dateColumn: 'target_date',
     filters: { purchaseStatus: 'purchase_status' },
+    // Checklist sections; values are fixed SQL fragments, chosen by key only.
+    states: {
+      open: "r.purchase_status IN ('suggested', 'approved', 'planned')",
+      done: "r.purchase_status = 'purchased'",
+      cancelled: "r.purchase_status = 'cancelled'",
+    },
     extraColumns: { expense_id: 'expenseId' },
   },
 };

@@ -5,8 +5,9 @@ shared budget together:
 
 - **Budget entries** – money received into the shared pot
 - **Expenses** – money spent, with receipts/invoices attached
-- **Suggested purchases** – ideas with an expected price, which can later be
-  turned into a real expense without double counting
+- **Suggestions checklist** – a shared list of things to buy, with an optional
+  expected price. Tick items off when done; optionally record the actual
+  expense (counted once, never double counted)
 - **Deletion requests** – nothing is deleted directly; another approver must
   approve, and approved records are archived (never erased)
 - **Audit history** – an append-only log of every change, shown on each record
@@ -109,9 +110,12 @@ A group always keeps at least one admin.
 - Budget received = sum of active budget entries; Expenses = sum of active expenses.
 - Records with a **pending** deletion request still count until approved.
 - Available balance = budget received − expenses (may go negative).
-- Suggested purchases never affect the balance. The estimate includes
-  Suggested/Approved/Planned only. Once *Purchased*, the suggestion is linked to
-  exactly one expense and only that expense counts.
+- Suggestions (checklist items) never affect the balance. The estimate covers
+  open items (Suggested/Approved/Planned) that have a price; items without a
+  price add nothing. Checking an item off marks it *Done* (stored as
+  `purchased`) without spending money. If an expense is linked (optional), only
+  that expense counts. A linked item can't be unchecked until it's unlinked;
+  unchecking restores the status it had before.
 
 ## Configuration
 

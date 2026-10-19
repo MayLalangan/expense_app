@@ -11,14 +11,15 @@ const { groupActivity } = require('./audit');
  *  - Available balance = budget received - expenses (may be negative).
  *  - Utilization       = expenses / budget received, null when budget is 0.
  *  - Suggested purchases never affect the totals above. The estimate covers
- *    Suggested/Approved/Planned only; once Purchased, the linked expense is
- *    what counts, so nothing is counted twice.
+ *    open items (Suggested/Approved/Planned) that have a price; once checked
+ *    off (Purchased), only a linked expense counts, so nothing is counted twice.
  */
 function computeTotals(db, groupId) {
   const budget = db.prepare(`SELECT COALESCE(SUM(amount_minor), 0) AS s, COUNT(*) AS n FROM budget_entries WHERE group_id = ? AND status = 'active'`).get(groupId);
   const expenses = db.prepare(`SELECT COALESCE(SUM(amount_minor), 0) AS s, COUNT(*) AS n FROM expenses WHERE group_id = ? AND status = 'active'`).get(groupId);
   const placeholders = ACTIVE_SUGGESTION_STATUSES.map(() => '?').join(', ');
-  const suggestions = db.prepare(`SELECT COALESCE(SUM(expected_price_minor), 0) AS s, COUNT(*) AS n FROM suggested_purchases
+  const suggestions = db.prepare(`SELECT COALESCE(SUM(expected_price_minor), 0) AS s, COUNT(*) AS n,
+                                         COUNT(*) - COUNT(expected_price_minor) AS unpriced FROM suggested_purchases
                                   WHERE group_id = ? AND status = 'active' AND purchase_status IN (${placeholders})`).get(groupId, ...ACTIVE_SUGGESTION_STATUSES);
   const pending = db.prepare(`SELECT COUNT(*) AS n FROM deletion_requests WHERE group_id = ? AND status = 'pending'`).get(groupId);
   const pendingExpense = db.prepare(`SELECT COALESCE(SUM(e.amount_minor), 0) AS s FROM deletion_requests d JOIN expenses e ON e.id = d.record_id
@@ -40,6 +41,7 @@ function computeTotals(db, groupId) {
     pendingDeletionBudgetMinor: pendingBudget.s,
     suggestionEstimateMinor: suggestions.s,
     suggestionCount: suggestions.n,
+    suggestionUnpricedCount: suggestions.unpriced,
   };
 }
 

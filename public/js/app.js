@@ -29,8 +29,9 @@
     append(el, children);
     return el;
   }
+  /** Appends a node, a string, or a (nested) array of them. */
   function append(el, children) {
-    for (const c of children.flat(Infinity)) {
+    for (const c of [children].flat(Infinity)) {
       if (c === null || c === undefined || c === false) continue;
       el.append(c instanceof Node ? c : document.createTextNode(String(c)));
     }
@@ -68,6 +69,9 @@
   };
   const fmtSize = (b) => (b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1048576).toFixed(1)} MB`);
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  // Suggestions use "purchased" internally; on the checklist that means "Done".
+  const statusLabel = (st) => (st === 'purchased' ? 'Done' : cap(st));
 
   function badge(status, label) {
     return h('span', { class: `badge ${status}` }, label || cap(status));
@@ -150,10 +154,10 @@
     suggestions: {
       key: 'suggested_purchase', label: 'Suggested purchase', plural: 'Suggested purchases', nav: 'Suggestions',
       titleKey: 'itemName', amountKey: 'expectedPriceMinor', dateKey: 'targetDate', dateLabel: 'Target',
-      blurb: 'Ideas for future purchases. Estimates never affect the actual budget or balance.',
+      blurb: 'A shared checklist of things to buy. Prices are optional estimates and never affect the budget or balance.',
       fields: [
         { key: 'itemName', label: 'Item / product', required: true, max: 200, full: true },
-        { key: 'expectedPriceMinor', input: 'expectedPrice', label: 'Expected price', kind: 'money', required: true },
+        { key: 'expectedPriceMinor', input: 'expectedPrice', label: 'Expected price', kind: 'money', help: 'Optional.' },
         { key: 'targetDate', label: 'Target date', kind: 'date' },
         { key: 'productUrl', label: 'Product link', kind: 'url', full: true, placeholder: 'https://…' },
         { key: 'notes', label: 'Notes', kind: 'textarea', max: 2000, full: true },
@@ -217,6 +221,7 @@
       if (section === 'activity') return await renderActivity(isCurrent);
       const type = TYPES[section];
       if (!type) return renderNotFound();
+      if (!id && section === 'suggestions' && query.get('view') !== 'table') return await renderChecklist(query, isCurrent);
       if (!id) return await renderList(section, query, isCurrent);
       if (id === 'new') return await renderForm(section, null, isCurrent);
       if (action === 'edit') return await renderForm(section, Number(id), isCurrent);
@@ -551,7 +556,7 @@
         can.write ? h('div', { class: 'row' },
           h('a', { class: 'btn primary', href: `#/g/${g.id}/expenses/new` }, '+ Expense'),
           h('a', { class: 'btn', href: `#/g/${g.id}/budget-entries/new` }, '+ Budget entry'),
-          h('a', { class: 'btn', href: `#/g/${g.id}/suggestions/new` }, '+ Suggest purchase')) : null),
+          h('a', { class: 'btn', href: `#/g/${g.id}/suggestions` }, '+ Checklist item')) : null),
       d.awaitingMyDecision ? h('div', { class: 'notice warn' },
         `${d.awaitingMyDecision} deletion request${d.awaitingMyDecision > 1 ? 's are' : ' is'} waiting for your decision. `,
         h('a', { href: `#/g/${g.id}/deletions` }, 'Review now')) : null,
@@ -561,14 +566,15 @@
         stat('Available balance', money(d.balanceMinor), d.balanceMinor < 0 ? 'Over budget' : 'Budget received − expenses', d.balanceMinor < 0 ? 'negative' : ''),
         stat('Budget used', util === null ? '—' : `${util.toLocaleString(Money.DEFAULT_LOCALE)}%`, util === null ? 'No budget received yet' : null, '', meter),
         stat('Pending deletions', String(d.pendingDeletionCount), pendingHint.length ? `Still counted: ${pendingHint.join(', ')}` : 'Nothing awaiting approval'),
-        stat('Suggested purchases (estimate)', money(d.suggestionEstimateMinor), `${d.suggestionCount} active – not included in totals`)),
+        stat('Checklist estimate', money(d.suggestionEstimateMinor),
+          `${d.suggestionCount} open item${d.suggestionCount === 1 ? '' : 's'}${d.suggestionUnpricedCount ? `, ${d.suggestionUnpricedCount} without a price` : ''} – not included in totals`)),
       h('details', { class: 'card small' },
         h('summary', null, 'How are these totals calculated?'),
         h('ul', null,
           h('li', null, 'Budget received and Expenses include all active (non-archived) records.'),
           h('li', null, 'Records with a pending deletion request still count until the request is approved; approved deletions are archived and excluded.'),
           h('li', null, 'Available balance = Budget received − Expenses.'),
-          h('li', null, 'Suggested purchases are estimates only and never change the balance. Once a suggestion is purchased, only its linked expense counts.'))),
+          h('li', null, 'Checklist (suggested purchase) prices are optional estimates and never change the balance. The estimate covers open items that have a price. Checking an item off does not spend money; only an expense linked to it counts.'))),
       h('div', { class: 'two-col' },
         h('section', { class: 'card' },
           h('h2', null, 'Recent activity'),
@@ -593,7 +599,7 @@
     created: 'created', updated: 'edited', deletion_requested: 'requested deletion of', deletion_approved: 'approved deletion of',
     deletion_rejected: 'rejected deletion of', deletion_cancelled: 'cancelled the deletion request for', archived: 'archived',
     attachment_added: 'added an attachment to', attachment_replaced: 'replaced an attachment on', attachment_removed: 'removed an attachment from',
-    linked_expense: 'linked an expense to', unlinked_expense: 'unlinked the expense from', linked_suggestion: 'linked a suggestion to',
+    checked: 'checked off', unchecked: 'unchecked', linked_expense: 'linked an expense to', unlinked_expense: 'unlinked the expense from', linked_suggestion: 'linked a suggestion to',
     unlinked_suggestion: 'unlinked the suggestion from', group_created: 'created the group', member_added: 'added a member',
     member_role_changed: 'changed a member’s role', member_revoked: 'removed a member', member_left: 'left the group',
     invitation_created: 'created an invite link', invitation_revoked: 'revoked an invite link', invitation_accepted: 'joined via an invite link',
@@ -603,7 +609,8 @@
     if (v === null || v === undefined || v === '') return '(empty)';
     if (/Minor$/.test(key)) return money(v);
     if (/Date$/.test(key)) return fmtDate(v);
-    if (key === 'purchaseStatus' || key === 'role') return cap(v);
+    if (key === 'purchaseStatus') return statusLabel(v);
+    if (key === 'role') return cap(v);
     return String(v);
   }
 
@@ -652,6 +659,129 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Suggestions checklist
+  // ---------------------------------------------------------------------------
+  async function renderChecklist(query, isCurrent) {
+    const g = state.group;
+    const can = g.permissions;
+    const base = `/groups/${g.id}/suggestions`;
+    loading();
+    const q = query.get('q') || '';
+    const list = (st, sort) => api(`${base}?state=${st}&pageSize=100&${sort}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
+    const [open, done, cancelled] = await Promise.all([
+      list('open', 'sort=created&order=asc'),
+      list('done', 'sort=updated&order=desc'),
+      list('cancelled', 'sort=updated&order=desc'),
+    ]);
+    if (!isCurrent()) return;
+
+    async function toggle(r, cb) {
+      cb.disabled = true;
+      try {
+        await api(`${base}/${r.id}/done`, { method: 'POST', body: { version: r.version, done: cb.checked } });
+        state.focusAfterRender = `chk-${r.id}`;
+        await route();
+      } catch (err) {
+        toast(err.message, 'error');
+        cb.checked = !cb.checked;
+        cb.disabled = false;
+      }
+    }
+
+    function item(r) {
+      const isDone = r.purchaseStatus === 'purchased';
+      let lockReason = null;
+      if (!can.write) lockReason = 'View-only access';
+      else if (r.pendingDeletion) lockReason = 'Deletion pending';
+      else if (isDone && r.expenseId) lockReason = 'Linked to an expense – unlink it on the details page to uncheck';
+      const id = `chk-${r.id}`;
+      const cb = h('input', { type: 'checkbox', id, checked: isDone, disabled: !!lockReason, title: lockReason, onchange: (e) => toggle(r, e.target) });
+      const meta = [];
+      if (['approved', 'planned'].includes(r.purchaseStatus)) meta.push(badge(r.purchaseStatus));
+      if (r.pendingDeletion) meta.push(badge('pending', 'Deletion pending'));
+      if (r.targetDate) meta.push(h('span', null, `Target ${fmtDate(r.targetDate)}`));
+      if (r.expenseId) meta.push(h('span', null, 'Expense recorded'));
+      if (r.attachmentCount) meta.push(h('span', null, `${r.attachmentCount} file${r.attachmentCount > 1 ? 's' : ''}`));
+      return h('li', { class: `check-item ${isDone ? 'done' : ''}` },
+        cb,
+        h('div', { class: 'check-body' },
+          h('label', { for: id, class: 'item-name' }, r.itemName),
+          meta.length ? h('div', { class: 'check-meta' }, meta.map((m, i) => [i ? ' · ' : '', m])) : null),
+        h('span', { class: 'num price' }, r.expectedPriceMinor ? money(r.expectedPriceMinor) : '—'),
+        h('a', { class: 'small', href: `#/g/${g.id}/suggestions/${r.id}`, 'aria-label': `Details for ${r.itemName}` }, 'Details'));
+    }
+
+    const section = (data, emptyText) => [
+      data.items.length ? h('ul', { class: 'checklist' }, data.items.map(item)) : h('p', { class: 'muted empty' }, emptyText),
+      data.total > data.items.length ? h('p', { class: 'small muted' }, `Showing ${data.items.length} of ${data.total}. `,
+        h('a', { href: `#/g/${g.id}/suggestions?view=table` }, 'Open the table view'), ' to page through all.') : null,
+    ];
+
+    let quickAdd = null;
+    if (can.write) {
+      const clientRequestId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+      quickAdd = h('form', { class: 'quick-add', novalidate: true },
+        h('div', null, h('label', { for: 'qa-name', class: 'visually-hidden' }, 'New item'),
+          h('input', { id: 'qa-name', name: 'itemName', placeholder: 'Add an item…', maxlength: 200, autocomplete: 'off', 'aria-describedby': 'qa-name-err' }),
+          h('div', { class: 'error', id: 'qa-name-err' })),
+        h('div', null, h('label', { for: 'qa-price', class: 'visually-hidden' }, 'Price (optional)'),
+          h('input', { id: 'qa-price', name: 'expectedPrice', placeholder: 'Price (optional)', inputmode: 'decimal', autocomplete: 'off', 'aria-describedby': 'qa-price-err' }),
+          h('div', { class: 'error', id: 'qa-price-err' })),
+        h('button', { type: 'submit', class: 'primary' }, 'Add'));
+      quickAdd.dataset.rid = clientRequestId();
+      quickAdd.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const els = quickAdd.elements;
+        const errors = {};
+        if (!els.itemName.value.trim()) errors.itemName = 'Type an item to add.';
+        if (els.expectedPrice.value.trim()) { const p = Money.parseAmount(els.expectedPrice.value); if (!p.ok) errors.expectedPrice = p.error; }
+        if (Object.keys(errors).length) return showFieldErrors(quickAdd, errors);
+        await busy(quickAdd.querySelector('[type=submit]'), 'Adding…', async () => {
+          try {
+            await api(base, { method: 'POST', body: { itemName: els.itemName.value, expectedPrice: els.expectedPrice.value, clientRequestId: quickAdd.dataset.rid } });
+            state.focusAfterRender = 'qa-name';
+            await route();
+          } catch (err) { toast(err.message, 'error'); showFieldErrors(quickAdd, err.details); }
+        });
+      });
+    }
+
+    let searchTimer;
+    const search = h('input', {
+      id: 'chk-q', type: 'search', value: q, placeholder: 'Search the checklist…', 'aria-label': 'Search the checklist',
+      oninput: (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => go(`#/g/${g.id}/suggestions${e.target.value ? `?q=${encodeURIComponent(e.target.value)}` : ''}`), 400); },
+    });
+    // Only exact when every open item is on this page; otherwise leave it out.
+    const unpriced = open.total === open.items.length ? open.items.filter((r) => !r.expectedPriceMinor).length : 0;
+
+    render(
+      h('div', { class: 'page-head' },
+        h('div', null, h('h1', null, 'Suggestions checklist'), h('p', { class: 'muted small', style: 'margin:0' }, TYPES.suggestions.blurb)),
+        h('div', { class: 'row small' },
+          h('a', { href: `#/g/${g.id}/suggestions?view=table` }, 'Table view (filter & sort)'), ' · ',
+          h('a', { href: `#/g/${g.id}/suggestions?view=table&status=archived` }, 'Archived'))),
+      h('div', { class: 'card' },
+        quickAdd,
+        h('div', { style: 'margin:.75rem 0' }, search),
+        h('h2', null, `To get (${open.total})`),
+        section(open, q ? 'No open items match your search.' : can.write ? 'Nothing on the list. Add an item above.' : 'Nothing on the list.'),
+        open.total ? h('p', { class: 'small muted check-total' }, 'Estimated total: ', h('strong', { class: 'num' }, money(open.sumMinor)),
+          unpriced ? ` · ${unpriced} item${unpriced > 1 ? 's' : ''} without a price` : '', ' · not included in the budget') : null),
+      h('details', { class: 'card', open: true },
+        h('summary', null, h('h2', { style: 'display:inline' }, `Done (${done.total})`)),
+        section(done, 'Nothing checked off yet.')),
+      cancelled.total ? h('details', { class: 'card' },
+        h('summary', null, h('h2', { style: 'display:inline' }, `Cancelled (${cancelled.total})`)),
+        section(cancelled, '')) : null);
+
+    const focusId = state.focusAfterRender;
+    state.focusAfterRender = null;
+    const focusEl = focusId && document.getElementById(focusId);
+    if (focusEl) focusEl.focus();
+    else if (q) { search.focus(); search.setSelectionRange(q.length, q.length); } else focusMain();
+  }
+
+  // ---------------------------------------------------------------------------
   // Record lists
   // ---------------------------------------------------------------------------
   async function renderList(section, query, isCurrent) {
@@ -681,7 +811,7 @@
     const filters = h('div', { class: 'filters', role: 'search' },
       filterField('Search', search),
       section === 'expenses' ? filterField('Category', sel('flt-cat', 'category', [['', 'All categories'], ...cats.categories.map((c) => [c, c])], query.get('category'))) : null,
-      section === 'suggestions' ? filterField('Status', sel('flt-ps', 'purchaseStatus', [['', 'All statuses'], ...SUGGESTION_STATUSES.map((s) => [s, cap(s)])], query.get('purchaseStatus'))) : null,
+      section === 'suggestions' ? filterField('Status', sel('flt-ps', 'purchaseStatus', [['', 'All statuses'], ...SUGGESTION_STATUSES.map((s) => [s, statusLabel(s)])], query.get('purchaseStatus'))) : null,
       filterField('From', h('input', { id: 'flt-from', type: 'date', value: query.get('from') || '', onchange: (e) => setQuery({ from: e.target.value }) })),
       filterField('To', h('input', { id: 'flt-to', type: 'date', value: query.get('to') || '', onchange: (e) => setQuery({ to: e.target.value }) })),
       filterField('Show', sel('flt-status', 'status', [['', 'Active'], ['archived', 'Archived'], ['all', 'All']], query.get('status'))),
@@ -725,7 +855,8 @@
 
     render(
       h('div', { class: 'page-head' },
-        h('div', null, h('h1', null, type.plural), h('p', { class: 'muted small', style: 'margin:0' }, type.blurb)),
+        h('div', null, h('h1', null, type.plural), h('p', { class: 'muted small', style: 'margin:0' }, type.blurb,
+          section === 'suggestions' ? [' ', h('a', { href: `#/g/${g.id}/suggestions` }, 'Back to checklist')] : null)),
         g.permissions.write ? h('a', { class: 'btn primary', href: `#/g/${g.id}/${section}/new` }, `+ Add ${type.label.toLowerCase()}`) : null),
       h('div', { class: 'card' }, filters, body, pager));
     if (query.get('q')) { search.focus(); search.setSelectionRange(search.value.length, search.value.length); } else focusMain();
@@ -734,7 +865,7 @@
   function statusBadges(r, section) {
     const out = [];
     if (r.status === 'archived') out.push(badge('archived', 'Archived'));
-    else if (section === 'suggestions') out.push(badge(r.purchaseStatus));
+    else if (section === 'suggestions') out.push(badge(r.purchaseStatus, statusLabel(r.purchaseStatus)));
     else out.push(badge('active', 'Active'));
     if (r.pendingDeletion) out.push(' ', badge('pending', 'Deletion pending'));
     return out;
@@ -883,10 +1014,9 @@
       let v = r[f.key];
       if (f.kind === 'date') v = fmtDate(v);
       else if (f.key === 'productUrl' && v) v = h('a', { href: v, target: '_blank', rel: 'noopener noreferrer nofollow' }, v);
-      else if (f.key === 'purchaseStatus') v = badge(v);
+      else if (f.key === 'purchaseStatus') v = badge(v, statusLabel(v));
       add(f.label, v ?? '—');
     }
-    if (section === 'suggestions' && r.purchaseStatus === 'purchased') add('Status', badge('purchased'));
     add('Created', `${fmtDateTime(r.createdAt)} by ${r.createdBy.name}`);
     add('Last edited', `${fmtDateTime(r.updatedAt)} by ${r.updatedBy.name}`);
     if (r.linkedSuggestion) add('From suggestion', h('a', { href: `#/g/${g.id}/suggestions/${r.linkedSuggestion.id}` }, r.linkedSuggestion.itemName));
@@ -969,28 +1099,45 @@
 
     function purchaseSection() {
       if (archived) return null;
-      const box = h('section', { class: 'card' }, h('h2', null, 'Purchase'));
-      if (r.purchaseStatus === 'purchased') {
-        append(box, [h('p', null, 'This suggestion has been purchased and is linked to an actual expense. Only the expense counts in the budget.'),
+      const isDone = r.purchaseStatus === 'purchased';
+      const box = h('section', { class: 'card' }, h('h2', null, 'Checklist'));
+      const lockedByExpense = isDone && !!r.expenseId;
+      const cb = h('input', { type: 'checkbox', id: 'done-toggle', checked: isDone, disabled: !editable || lockedByExpense });
+      cb.addEventListener('change', async () => {
+        cb.disabled = true;
+        try {
+          await api(`${base}/done`, { method: 'POST', body: { version: r.version, done: cb.checked } });
+          toast(cb.checked ? 'Checked off.' : 'Unchecked.');
+          route();
+        } catch (err) { toast(err.message, 'error'); cb.checked = isDone; cb.disabled = false; }
+      });
+      append(box, h('div', { class: 'check-row' }, cb, h('label', { for: 'done-toggle' }, isDone ? 'Done' : 'Mark as done')));
+
+      if (lockedByExpense) {
+        append(box, [h('p', { class: 'small muted' }, 'Linked to an actual expense, which is what counts in the budget. Unlink it to uncheck this item.'),
           editable ? h('button', { type: 'button', class: 'small', onclick: unlink }, 'Unlink expense') : null]);
         return box;
       }
-      if (r.purchaseStatus === 'cancelled') { append(box, h('p', { class: 'muted' }, 'Cancelled. Change the status to plan it again.')); return box; }
-      if (!editable) { append(box, h('p', { class: 'muted' }, 'Not purchased yet.')); return box; }
+      if (!editable) return box;
+
       const form = h('form', { novalidate: true },
-        h('p', { class: 'small muted' }, 'Bought it? Record the actual expense. The estimate is then removed from the suggestions total so nothing is counted twice.'),
+        h('p', { class: 'small muted' }, isDone
+          ? 'Optional: record what it actually cost as an expense, so it counts in the budget.'
+          : 'Bought it? You can check it off and record the actual expense in one step (optional).'),
         h('div', { class: 'form-grid' },
           field({ key: 'title', label: 'Expense title', required: true, max: 200 }, r.itemName, { idPrefix: 'pe' }),
-          field({ key: 'amount', label: 'Actual amount', kind: 'money', required: true }, Money.toInputString(r.expectedPriceMinor), { idPrefix: 'pe' }),
+          field({ key: 'amount', label: 'Actual amount', kind: 'money', required: true }, r.expectedPriceMinor ? Money.toInputString(r.expectedPriceMinor) : '', { idPrefix: 'pe' }),
           field({ key: 'expenseDate', label: 'Expense date', kind: 'date', required: true }, today(), { idPrefix: 'pe' }),
           field({ key: 'category', label: 'Category', max: 60 }, '', { idPrefix: 'pe' })),
-        h('div', { class: 'row' }, h('button', { type: 'submit', class: 'primary' }, 'Mark purchased & create expense')));
+        h('div', { class: 'row' }, h('button', { type: 'submit' }, isDone ? 'Create & link expense' : 'Check off & create expense')));
       const notice = formNotice(form);
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
+        const els = form.elements;
+        const amt = Money.parseAmount(els.amount.value);
+        if (!amt.ok) return showFieldErrors(form, { amount: amt.error });
         await busy(form.querySelector('[type=submit]'), 'Saving…', async () => {
           try {
-            const els = form.elements;
             const res = await api(`${base}/link-expense`, { method: 'POST', body: { version: r.version, createExpense: { title: els.title.value, amount: els.amount.value, expenseDate: els.expenseDate.value, category: els.category.value } } });
             toast('Expense created and linked. Attach the receipt to the expense.');
             go(`#/g/${g.id}/expenses/${res.expenseId}`);
@@ -998,7 +1145,8 @@
         });
       });
       const linkExisting = h('button', { type: 'button', class: 'link small', onclick: chooseExisting }, 'Or link an existing expense…');
-      append(box, [form, h('p', { style: 'margin-top:.5rem' }, linkExisting)]);
+      append(box, h('details', { class: 'small', style: 'margin-top:.75rem' }, h('summary', null, isDone ? 'Record the actual expense' : 'Record the actual expense too'),
+        form, h('p', { style: 'margin-top:.5rem' }, linkExisting)));
       return box;
     }
 
@@ -1022,7 +1170,7 @@
     }
 
     async function unlink() {
-      const ok = await confirmDialog({ title: 'Unlink the expense?', message: 'The suggestion goes back to Planned. The expense itself is not changed.', confirmLabel: 'Unlink' });
+      const ok = await confirmDialog({ title: 'Unlink the expense?', message: 'The item stays checked off. The expense itself is not changed.', confirmLabel: 'Unlink' });
       if (!ok) return;
       try { await api(`${base}/unlink-expense`, { method: 'POST', body: { version: r.version } }); toast('Unlinked.'); route(); } catch (err) { toast(err.message, 'error'); }
     }
