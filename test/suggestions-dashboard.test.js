@@ -6,7 +6,7 @@ const { makeApp, signUp, makeGroup } = require('./helpers');
 const { computeTotals } = require('../src/dashboard');
 
 test('suggested purchases: statuses, totals and expense linking', async (t) => {
-  const { app, db, cleanup } = makeApp();
+  const { app, db, cleanup } = await makeApp();
   t.after(cleanup);
   const alice = await signUp(app, 'Alice');
   const ed = await signUp(app, 'Ed');
@@ -96,15 +96,15 @@ test('suggested purchases: statuses, totals and expense linking', async (t) => {
   await t.test('cancelled suggestions are excluded from the estimate', async () => {
     const st = (await ed.get(`${S}/${stove.id}`)).body.record;
     await ed.post(`${S}/${stove.id}/done`, { version: st.version, done: false });
-    assert.equal(computeTotals(db, gid).suggestionEstimateMinor, 40050);
+    assert.equal((await computeTotals(db, gid)).suggestionEstimateMinor, 40050);
     const st2 = (await ed.get(`${S}/${stove.id}`)).body.record;
     await ed.patch(`${S}/${stove.id}`, { version: st2.version, purchaseStatus: 'cancelled' });
-    assert.equal(computeTotals(db, gid).suggestionEstimateMinor, 0);
+    assert.equal((await computeTotals(db, gid)).suggestionEstimateMinor, 0);
   });
 });
 
 test('dashboard calculations', async (t) => {
-  const { app, db, cleanup } = makeApp();
+  const { app, db, cleanup } = await makeApp();
   t.after(cleanup);
   const alice = await signUp(app, 'Alice');
   const other = await signUp(app, 'Other');
@@ -137,11 +137,11 @@ test('dashboard calculations', async (t) => {
   d = (await alice.get(`${G}/dashboard`)).body;
   assert.equal(d.balanceMinor, -80);
   assert.equal(d.utilizationPercent, 366.7);
-  assert.deepEqual(computeTotals(db, ogid).expenseTotalMinor, 99900);
+  assert.deepEqual((await computeTotals(db, ogid)).expenseTotalMinor, 99900);
 });
 
 test('suggestions checklist: optional price, check off and uncheck', async (t) => {
-  const { app, db, cleanup } = makeApp();
+  const { app, db, cleanup } = await makeApp();
   t.after(cleanup);
   const alice = await signUp(app, 'Alice');
   const ed = await signUp(app, 'Ed');
@@ -155,7 +155,7 @@ test('suggestions checklist: optional price, check off and uncheck', async (t) =
   const cord = (await ed.post(S, { itemName: 'Extension cord', expectedPrice: '350'})).body.record;
   assert.equal((await ed.post(S, { itemName: 'X', expectedPrice: 'abc' })).status, 400); // still validated when given
 
-  let d = computeTotals(db, gid);
+  let d = (await computeTotals(db, gid));
   assert.equal(d.suggestionEstimateMinor, 35000);
   assert.equal(d.suggestionCount, 2);
   assert.equal(d.suggestionUnpricedCount, 1);
@@ -165,7 +165,7 @@ test('suggestions checklist: optional price, check off and uncheck', async (t) =
     assert.equal(r.status, 200);
     assert.equal(r.body.record.purchaseStatus, 'purchased');
     assert.equal(r.body.record.expenseId, null);
-    d = computeTotals(db, gid);
+    d = (await computeTotals(db, gid));
     assert.equal(d.suggestionEstimateMinor, 0);
     assert.equal(d.expenseTotalMinor, 0);
     assert.equal((await ed.post(`${S}/${cord.id}/done`, { version: cord.version, done: false })).status, 409); // stale version
@@ -190,7 +190,7 @@ test('suggestions checklist: optional price, check off and uncheck', async (t) =
     const c = (await ed.get(`${S}/${cord.id}`)).body.record;
     const link = await ed.post(`${S}/${cord.id}/link-expense`, { version: c.version, createExpense: { title: 'Extension cord', amount: '330', expenseDate: '2026-10-19' } });
     assert.equal(link.status, 200, JSON.stringify(link.body));
-    assert.equal(computeTotals(db, gid).expenseTotalMinor, 33000);
+    assert.equal((await computeTotals(db, gid)).expenseTotalMinor, 33000);
     assert.equal((await ed.post(`${S}/${cord.id}/done`, { version: link.body.record.version, done: false })).status, 409);
   });
 

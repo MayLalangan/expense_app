@@ -1,10 +1,9 @@
 'use strict';
 
-const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const express = require('express');
-const { openDatabase } = require('./db');
+const { openDatabase, isConstraintError } = require('./db');
 const { createAuth } = require('./auth');
 const { HttpError, wrap, notFound, unauthorized, badRequest } = require('./util');
 const { createFileStore, createUploadMiddleware } = require('./attachments');
@@ -65,10 +64,11 @@ function sameOrigin(req, _res, next) {
   next();
 }
 
-function createApp(config, { logger = console } = {}) {
-  const db = openDatabase(config.dbPath);
+async function createApp(config, { logger = console } = {}) {
+  const db = await openDatabase(config, logger);
   const auth = createAuth({ db, config });
   const fileStore = createFileStore(config);
+  await fileStore.init();
   const uploadMiddleware = createUploadMiddleware(config);
 
   const app = express();
@@ -85,7 +85,12 @@ function createApp(config, { logger = console } = {}) {
     });
   }
 
-  app.get('/healthz', (_req, res) => res.json({ ok: true }));
+  // ?db=1 also touches the database; the scheduled keep-alive uses it so the
+  // free Supabase project never counts as inactive.
+  app.get('/healthz', wrap(async (req, res) => {
+    if (req.query.db === '1') await db.get('SELECT COUNT(*) AS n FROM schema_migrations');
+    res.set('Cache-Control', 'no-store').json({ ok: true });
+  }));
 
   // ---- API -----------------------------------------------------------------
   const api = express.Router();
@@ -104,19 +109,19 @@ function createApp(config, { logger = console } = {}) {
   api.use(auth.loadSession);
 
   const authLimiter = rateLimit(config.rateLimit);
-  api.post('/auth/signup', authLimiter, wrap((req, res) => res.status(201).json(auth.signUp(req.body, res))));
-  api.post('/auth/signin', authLimiter, wrap((req, res) => res.json(auth.signIn(req.body, res))));
+  api.post('/auth/signup', authLimiter, wrap(async (req, res) => res.status(201).json(await auth.signUp(req.body, res))));
+  api.post('/auth/signin', authLimiter, wrap(async (req, res) => res.json(await auth.signIn(req.body, res))));
   api.get('/auth/me', (req, res, next) => {
     if (!req.user) return next(unauthorized(req.sessionExpired ? 'Your session has expired. Please sign in again.' : 'Not signed in.'));
     res.json({ user: req.user, csrfToken: req.csrfToken });
   });
 
   api.use(auth.requireUser, auth.requireCsrf);
-  api.post('/auth/signout', (req, res) => { auth.destroySession(req, res); res.json({ ok: true }); });
+  api.post('/auth/signout', wrap(async (req, res) => { await auth.destroySession(req, res); res.json({ ok: true }); }));
 
-  api.get('/groups/:gid/dashboard', wrap((req, res) => {
-    const m = loadMembership(db, parseId(req.params.gid, 'group'), req.user.id);
-    res.json(dashboard(db, m, req.user.id));
+  api.get('/groups/:gid/dashboard', wrap(async (req, res) => {
+    const m = await loadMembership(db, parseId(req.params.gid, 'group'), req.user.id);
+    res.json(await dashboard(db, m, req.user.id));
   }));
   api.use(groupsRouter({ db, config }));
   api.use(recordsRouter({ db, config, fileStore, uploadMiddleware }));
@@ -125,16 +130,16 @@ function createApp(config, { logger = console } = {}) {
   app.use('/api', api);
 
   // ---- Authorized, short-lived attachment delivery -------------------------
-  app.get('/files/:token', auth.loadSession, wrap((req, res) => {
+  app.get('/files/:token', auth.loadSession, wrap(async (req, res) => {
     const t = fileStore.verifyDownloadToken(req.params.token);
     if (!t) throw notFound('This link has expired. Go back and open the file again.');
     // The link is bound to the user who requested it and re-checks membership now.
     if (!req.user || req.user.id !== t.userId) throw unauthorized('Please sign in to view this file.');
-    const a = db.prepare('SELECT * FROM attachments WHERE id = ?').get(t.attachmentId);
+    const a = await db.get('SELECT * FROM attachments WHERE id = ?', [t.attachmentId]);
     if (!a) throw notFound();
-    loadMembership(db, a.group_id, req.user.id);
-    const filePath = fileStore.filePath(a.storage_name);
-    if (!fs.existsSync(filePath)) throw notFound('File is missing from storage.');
+    await loadMembership(db, a.group_id, req.user.id);
+    const content = await fileStore.read(a.storage_name);
+    if (!content) throw notFound('File is missing from storage.');
     const disposition = req.query.download === '1' ? 'attachment' : 'inline';
     res.set({
       'Content-Type': a.mime_type,
@@ -144,7 +149,7 @@ function createApp(config, { logger = console } = {}) {
     });
     if (a.mime_type.startsWith('image/')) res.set('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
     else res.removeHeader('Content-Security-Policy');
-    fs.createReadStream(filePath).pipe(res);
+    res.send(content);
   }));
 
   // ---- Frontend ------------------------------------------------------------
@@ -157,7 +162,7 @@ function createApp(config, { logger = console } = {}) {
     let details = err.details;
     if (err.type === 'entity.parse.failed') { status = 400; message = 'Malformed JSON body.'; }
     if (err.type === 'entity.too.large') { status = 413; message = 'Request body is too large.'; }
-    if (status === 500 && /constraint failed/i.test(err.message || '')) {
+    if (status === 500 && isConstraintError(err)) {
       status = 409; message = 'That change conflicts with existing data. Reload and try again.'; details = undefined;
     }
     if (status >= 500) {
@@ -171,6 +176,7 @@ function createApp(config, { logger = console } = {}) {
   });
 
   app.locals.db = db;
+  app.locals.fileStore = fileStore;
   return app;
 }
 

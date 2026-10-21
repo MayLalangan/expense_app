@@ -6,18 +6,18 @@ const request = require('supertest');
 const { makeApp, signUp, makeGroup, PDF } = require('./helpers');
 
 test('audit log is append-only and member-restricted', async (t) => {
-  const { app, db, cleanup } = makeApp();
+  const { app, db, cleanup } = await makeApp();
   t.after(cleanup);
   const alice = await signUp(app, 'Alice');
   const outsider = await signUp(app, 'Outsider');
   const gid = await makeGroup(alice);
   await alice.post(`/api/groups/${gid}/expenses`, { title: 'Soap', amount: '20', expenseDate: '2026-10-01' });
 
-  const before = db.prepare('SELECT * FROM audit_log ORDER BY id').all();
+  const before = (await db.all('SELECT * FROM audit_log ORDER BY id'));
   assert.ok(before.length >= 2);
-  assert.throws(() => db.prepare(`UPDATE audit_log SET action = 'tampered'`).run(), /append-only/);
-  assert.throws(() => db.prepare('DELETE FROM audit_log').run(), /append-only/);
-  assert.deepEqual(db.prepare('SELECT * FROM audit_log ORDER BY id').all(), before);
+  await assert.rejects(db.run(`UPDATE audit_log SET action = 'tampered'`), /append-only/);
+  await assert.rejects(db.run('DELETE FROM audit_log'), /append-only/);
+  assert.deepEqual((await db.all('SELECT * FROM audit_log ORDER BY id')), before);
 
   for (const row of before) {
     assert.ok(row.actor_id && row.created_at && row.action && row.record_type);
@@ -29,7 +29,7 @@ test('audit log is append-only and member-restricted', async (t) => {
 });
 
 test('end-to-end journey across two members', async (t) => {
-  const { app, cleanup } = makeApp();
+  const { app, cleanup } = await makeApp();
   t.after(cleanup);
 
   // Owner signs up, creates a group and an invite link.

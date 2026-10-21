@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { makeApp, signUp, makeGroup } = require('./helpers');
 
 test('budget entries and expenses: create, validate, list, edit, audit', async (t) => {
-  const { app, db, cleanup } = makeApp();
+  const { app, db, cleanup } = await makeApp();
   t.after(cleanup);
   const alice = await signUp(app, 'Alice');
   const bob = await signUp(app, 'Bob');
@@ -39,7 +39,7 @@ test('budget entries and expenses: create, validate, list, edit, audit', async (
     const [a, b] = await Promise.all([alice.post(E, body), alice.post(E, body)]);
     assert.deepEqual([a.status, b.status].sort(), [200, 201]);
     assert.equal(a.body.record.id, b.body.record.id);
-    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM expenses WHERE title = 'Rent'`).get().n, 1);
+    assert.equal((await db.get(`SELECT COUNT(*) AS n FROM expenses WHERE title = 'Rent'`)).n, 1);
   });
 
   await t.test('lists with search, filters, sorting and pagination', async () => {
@@ -93,10 +93,13 @@ test('budget entries and expenses: create, validate, list, edit, audit', async (
     assert.equal((await bob.patch(`${E}/${created.id}`, { title: 'x' })).status, 400); // version required
   });
 
-  await t.test('database constraints back up server validation', () => {
-    assert.throws(() => db.prepare(`INSERT INTO expenses (group_id, title, amount_minor, expense_date, created_by, created_at, updated_by, updated_at)
-                                    VALUES (?, 'x', 1.5, '2026-01-01', ?, 'now', ?, 'now')`).run(gid, alice.user.id, alice.user.id), /CHECK/);
-    assert.throws(() => db.prepare(`INSERT INTO expenses (group_id, title, amount_minor, expense_date, created_by, created_at, updated_by, updated_at)
-                                    VALUES (?, 'x', -100, '2026-01-01', ?, 'now', ?, 'now')`).run(gid, alice.user.id, alice.user.id), /CHECK/);
+  await t.test('database constraints back up server validation', async () => {
+    // Fractional amounts are impossible: the column is an integer type.
+    await assert.rejects(db.run(`INSERT INTO expenses (group_id, title, amount_minor, expense_date, created_by, created_at, updated_by, updated_at)
+                                    VALUES (?, 'x', '1.5', '2026-01-01', ?, 'now', ?, 'now')`, [gid, alice.user.id, alice.user.id]), /invalid input syntax for type bigint/);
+    await assert.rejects(db.run(`INSERT INTO expenses (group_id, title, amount_minor, expense_date, created_by, created_at, updated_by, updated_at)
+                                    VALUES (?, 'x', 100, '2026-02-3x', ?, 'now', ?, 'now')`, [gid, alice.user.id, alice.user.id]), /check constraint/);
+    await assert.rejects(db.run(`INSERT INTO expenses (group_id, title, amount_minor, expense_date, created_by, created_at, updated_by, updated_at)
+                                    VALUES (?, 'x', -100, '2026-01-01', ?, 'now', ?, 'now')`, [gid, alice.user.id, alice.user.id]), /check constraint/);
   });
 });

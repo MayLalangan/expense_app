@@ -14,18 +14,18 @@ const { groupActivity } = require('./audit');
  *    open items (Suggested/Approved/Planned) that have a price; once checked
  *    off (Purchased), only a linked expense counts, so nothing is counted twice.
  */
-function computeTotals(db, groupId) {
-  const budget = db.prepare(`SELECT COALESCE(SUM(amount_minor), 0) AS s, COUNT(*) AS n FROM budget_entries WHERE group_id = ? AND status = 'active'`).get(groupId);
-  const expenses = db.prepare(`SELECT COALESCE(SUM(amount_minor), 0) AS s, COUNT(*) AS n FROM expenses WHERE group_id = ? AND status = 'active'`).get(groupId);
+async function computeTotals(db, groupId) {
+  const budget = await db.get(`SELECT COALESCE(SUM(amount_minor), 0) AS s, COUNT(*) AS n FROM budget_entries WHERE group_id = ? AND status = 'active'`, [groupId]);
+  const expenses = await db.get(`SELECT COALESCE(SUM(amount_minor), 0) AS s, COUNT(*) AS n FROM expenses WHERE group_id = ? AND status = 'active'`, [groupId]);
   const placeholders = ACTIVE_SUGGESTION_STATUSES.map(() => '?').join(', ');
-  const suggestions = db.prepare(`SELECT COALESCE(SUM(expected_price_minor), 0) AS s, COUNT(*) AS n,
-                                         COUNT(*) - COUNT(expected_price_minor) AS unpriced FROM suggested_purchases
-                                  WHERE group_id = ? AND status = 'active' AND purchase_status IN (${placeholders})`).get(groupId, ...ACTIVE_SUGGESTION_STATUSES);
-  const pending = db.prepare(`SELECT COUNT(*) AS n FROM deletion_requests WHERE group_id = ? AND status = 'pending'`).get(groupId);
-  const pendingExpense = db.prepare(`SELECT COALESCE(SUM(e.amount_minor), 0) AS s FROM deletion_requests d JOIN expenses e ON e.id = d.record_id
-                                     WHERE d.group_id = ? AND d.status = 'pending' AND d.record_type = 'expense'`).get(groupId);
-  const pendingBudget = db.prepare(`SELECT COALESCE(SUM(b.amount_minor), 0) AS s FROM deletion_requests d JOIN budget_entries b ON b.id = d.record_id
-                                    WHERE d.group_id = ? AND d.status = 'pending' AND d.record_type = 'budget_entry'`).get(groupId);
+  const suggestions = await db.get(`SELECT COALESCE(SUM(expected_price_minor), 0) AS s, COUNT(*) AS n,
+                                           COUNT(*) - COUNT(expected_price_minor) AS unpriced FROM suggested_purchases
+                                    WHERE group_id = ? AND status = 'active' AND purchase_status IN (${placeholders})`, [groupId, ...ACTIVE_SUGGESTION_STATUSES]);
+  const pending = await db.get(`SELECT COUNT(*) AS n FROM deletion_requests WHERE group_id = ? AND status = 'pending'`, [groupId]);
+  const pendingExpense = await db.get(`SELECT COALESCE(SUM(e.amount_minor), 0) AS s FROM deletion_requests d JOIN expenses e ON e.id = d.record_id
+                                       WHERE d.group_id = ? AND d.status = 'pending' AND d.record_type = 'expense'`, [groupId]);
+  const pendingBudget = await db.get(`SELECT COALESCE(SUM(b.amount_minor), 0) AS s FROM deletion_requests d JOIN budget_entries b ON b.id = d.record_id
+                                      WHERE d.group_id = ? AND d.status = 'pending' AND d.record_type = 'budget_entry'`, [groupId]);
 
   const balance = budget.s - expenses.s;
   return {
@@ -45,22 +45,22 @@ function computeTotals(db, groupId) {
   };
 }
 
-function dashboard(db, membership, userId) {
-  const totals = computeTotals(db, membership.group_id);
-  const myOpenRequests = db.prepare(`SELECT COUNT(*) AS n FROM deletion_requests WHERE group_id = ? AND status = 'pending' AND requested_by = ?`)
-    .get(membership.group_id, userId).n;
+async function dashboard(db, membership, userId) {
+  const totals = await computeTotals(db, membership.group_id);
+  const myOpenRequests = (await db.get(`SELECT COUNT(*) AS n FROM deletion_requests WHERE group_id = ? AND status = 'pending' AND requested_by = ?`,
+    [membership.group_id, userId])).n;
   const awaitingMyDecision = ['approver', 'admin'].includes(membership.role)
-    ? db.prepare(`SELECT COUNT(*) AS n FROM deletion_requests WHERE group_id = ? AND status = 'pending' AND requested_by <> ?`).get(membership.group_id, userId).n
+    ? (await db.get(`SELECT COUNT(*) AS n FROM deletion_requests WHERE group_id = ? AND status = 'pending' AND requested_by <> ?`, [membership.group_id, userId])).n
     : 0;
-  const recentDecisions = db.prepare(`SELECT id, message, link, created_at AS createdAt, read_at AS readAt FROM notifications
-                                      WHERE user_id = ? AND group_id = ? ORDER BY id DESC LIMIT 5`).all(userId, membership.group_id);
+  const recentDecisions = await db.all(`SELECT id, message, link, created_at AS "createdAt", read_at AS "readAt" FROM notifications
+                                        WHERE user_id = ? AND group_id = ? ORDER BY id DESC LIMIT 5`, [userId, membership.group_id]);
   return {
     currency: membership.currency,
     ...totals,
     myOpenRequests,
     awaitingMyDecision,
     recentDecisions,
-    recentActivity: groupActivity(db, membership.group_id, { limit: 10 }),
+    recentActivity: await groupActivity(db, membership.group_id, { limit: 10 }),
   };
 }
 

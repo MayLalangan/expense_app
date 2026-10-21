@@ -1,0 +1,31 @@
+# Render Blueprint: one free web service. Data lives in Supabase (Postgres +
+# Storage) because Render's free instances have no persistent disk.
+services:
+  - type: web
+    name: expense-app
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    # Deploys are triggered by GitHub Actions after the tests pass.
+    autoDeployTrigger: "off"
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: TRUST_PROXY
+        value: "true"
+      - key: DOWNLOAD_LINK_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: DATABASE_CA_CERT
+        sync: false

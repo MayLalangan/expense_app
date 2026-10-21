@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { makeApp, signUp, makeGroup } = require('./helpers');
 
 test('deletion request and approval workflow', async (t) => {
-  const { app, db, cleanup } = makeApp();
+  const { app, db, cleanup } = await makeApp();
   t.after(cleanup);
   const alice = await signUp(app, 'Alice'); // admin
   const bob = await signUp(app, 'Bob'); // approver
@@ -55,7 +55,7 @@ test('deletion request and approval workflow', async (t) => {
     assert.equal((await bob.post(`${G}/deletion-requests/${id}/approve`)).status, 403);
     assert.equal((await bob.post(`${G}/deletion-requests/${id}/reject`)).status, 403);
     // The database also refuses it.
-    assert.throws(() => db.prepare(`UPDATE deletion_requests SET status = 'approved', decided_by = ?, decided_at = 'now' WHERE id = ?`).run(bob.user.id, id), /CHECK/);
+    await assert.rejects(db.run(`UPDATE deletion_requests SET status = 'approved', decided_by = ?, decided_at = 'now' WHERE id = ?`, [bob.user.id, id]), /check constraint/);
     assert.equal((await bob.post(`${G}/deletion-requests/${id}/cancel`)).status, 200);
     assert.equal((await alice.post(`${G}/deletion-requests/${id}/cancel`)).status, 403);
   });
@@ -78,7 +78,7 @@ test('deletion request and approval workflow', async (t) => {
   await t.test('approval archives (not hard-deletes) and updates totals', async () => {
     const r = await alice.post(`${G}/deletion-requests/${reqId}/approve`, { reason: 'Confirmed refund' });
     assert.equal(r.status, 200);
-    const row = db.prepare('SELECT * FROM expenses WHERE id = ?').get(exp.id);
+    const row = (await db.get('SELECT * FROM expenses WHERE id = ?', [exp.id]));
     assert.equal(row.status, 'archived');
     assert.equal(row.archived_by, alice.user.id);
 

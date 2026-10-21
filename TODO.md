@@ -14,12 +14,12 @@
 > decisions and unresolved questions below. - Never place passwords, API
 > keys, tokens, or other secrets in this file.
 
-_Status as of 2026-10-17: first full implementation. `npm run check` →
-ESLint clean, 62/62 automated tests passing, `npm audit` 0 vulnerabilities.
-UI flows exercised with a scripted DOM run against a live server (sign-up,
-group, budget entry, expense create/edit, deletion request, list/search/empty
-state, suggestion → expense, deletions, invite link, activity, dashboard,
-sign-out/redirect/sign-in)._
+_Status as of 2026-10-19: Postgres version ready for Render + Supabase.
+`npm run check` → ESLint clean, 76/76 tests passing on PGlite and 76/76 on a
+real Postgres server (pg driver); `npm audit` 0 vulnerabilities. Scripted DOM
+walkthrough of all main screens passes against the Postgres build; production
+mode verified locally (secure cookie, HSTS, keep-alive endpoint). Not yet run
+against live Supabase/Render — accounts still to be created._
 
 ## 1. Project discovery and planning
 
@@ -31,9 +31,10 @@ sign-out/redirect/sign-in)._
 -   [x] Read existing documentation and configuration before making
     changes.
 -   [x] Document the current architecture and data flow. _(README.md)_
--   [ ] Confirm the target deployment environment and required
-    environment variables. _(Env vars documented in `.env.example`;
-    hosting platform still undecided — see Open Questions.)_
+-   [x] Confirm the target deployment environment and required
+    environment variables. _(2026-10-19: Render free web service +
+    Supabase free Postgres/Storage, deployed by GitHub Actions; variables in
+    `.env.example` and `render.yaml`.)_
 -   [x] Identify the authentication provider, database, file-storage
     solution, and testing framework.
 -   [x] Record assumptions and unresolved product decisions in the Open
@@ -139,8 +140,10 @@ sign-out/redirect/sign-in)._
 
 ## 6. Attachments and receipt storage
 
--   [x] Choose and configure private file storage. _(Local private dir
-    under `DATA_DIR`, mode 0700/0600.)_
+-   [x] Choose and configure private file storage. _(Production: private
+    Supabase Storage bucket, server-side only. Local/tests: private dir under
+    `DATA_DIR`. Supabase backend tested against a fake API; not yet against a
+    live project.)_
 -   [x] Initially allow PDF, JPG, JPEG, and PNG files.
 -   [x] Validate file type, file size, and file content on the server.
     _(Magic bytes + extension match + 10 MB limit.)_
@@ -342,14 +345,18 @@ sign-out/redirect/sign-in)._
 -   [x] Document required environment variables without including their
     secret values.
 -   [ ] Configure production authentication, database, and private file
-    storage.
+    storage. _(Code, `render.yaml` and step-by-step README instructions are
+    ready; waiting for the Supabase/Render accounts to be created.)_
 -   [x] Apply database migrations safely. _(Versioned, transactional,
     automatic at start-up.)_
 -   [ ] Configure production logging, monitoring, and error reporting.
+    _(Request/error logs go to Render's log viewer; daily keep-alive
+    workflow fails visibly if the app is down. No alerting service yet.)_
 -   [ ] Verify HTTPS and secure cookie/session settings where
     applicable.
--   [ ] Confirm backup and recovery procedures work. _(On the production
-    host.)_
+-   [ ] Confirm backup and recovery procedures work. _(Backup/restore and
+    SQLite import tested automatically on PGlite and real Postgres; still to
+    run once against the live Supabase project.)_
 -   [ ] Verify authorization rules in the production configuration.
 -   [ ] Run a release smoke test for sign-in, budget entries, expenses,
     attachments, approvals, and suggested purchases.
@@ -378,13 +385,20 @@ useful.
 
 -   **Framework:** Node.js 22 + Express 4, plain-JS SPA frontend
     (2026-10-17, approved plan; no build step, minimal dependencies).
--   **Database:** SQLite via built-in `node:sqlite` (2026-10-17;
-    `better-sqlite3` crashed with a segfault on this macOS version).
+-   **Database:** Postgres — Supabase in production (`pg`), PGlite locally
+    and in tests (2026-10-19; moved from SQLite because Render's free tier has
+    no persistent disk. Existing SQLite data imports with
+    `npm run import-sqlite`). Row Level Security enabled on all tables.
 -   **Authentication:** Built-in name + password, scrypt, server-side
     sessions (2026-10-17; user asked for name-only sign-in, no email).
--   **Private file storage:** Local private directory under `DATA_DIR`,
-    delivered through 5-minute signed links.
--   **Deployment target:** TBD (needs single instance + persistent disk).
+-   **Private file storage:** Private Supabase Storage bucket in production,
+    local directory in development; always delivered through the app's
+    5-minute signed links.
+-   **Deployment target:** Render free web service (single instance, sleeps
+    after 15 min idle) + Supabase free project; GitHub Actions runs lint/tests
+    on PGlite and Postgres 17, then triggers the Render deploy hook for the
+    tested commit; daily keep-alive ping prevents Supabase pausing
+    (2026-10-19, user wants a free setup for 2–3 users).
 -   **Currency and display locale:** One currency per group, default
     Philippine peso (PHP); USD/EUR/SEK/GBP/NOK/DKK also allowed. Amounts
     and dates display in the en-PH locale (e.g. ₱1,234.50). Input accepts
@@ -400,8 +414,8 @@ useful.
 
 Resolve these before relying on assumptions in production.
 
--   [ ] Which framework and hosting platform will be used? _(Framework
-    decided; hosting open.)_
+-   [x] Which framework and hosting platform will be used? _(Render +
+    Supabase, see notes.)_
 -   [x] Which database and authentication provider will be used?
 -   [x] Is each workspace limited to one group, or can a user belong to
     multiple groups? _(Multiple groups.)_
@@ -418,6 +432,8 @@ Resolve these before relying on assumptions in production.
     informational only? _(Informational only.)_
 -   [x] What file-size limits and retention periods should apply?
     _(10 MB/file, 10 files/upload; retain indefinitely.)_
+-   [ ] Supabase free has no automatic backups: who runs `npm run backup`
+    and how often?
 -   [ ] What notifications are needed for invitations, deletion
     decisions, and other events? _(Only in-app deletion-decision
     notifications today; email/push undecided.)_

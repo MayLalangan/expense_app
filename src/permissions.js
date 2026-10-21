@@ -32,10 +32,10 @@ function permissionsFor(role) {
 }
 
 /** Returns the caller's active membership in a group or throws 404 (no existence leak). */
-function loadMembership(db, groupId, userId) {
-  const row = db.prepare(`SELECT m.role, g.id AS group_id, g.name AS group_name, g.currency
-                          FROM memberships m JOIN groups g ON g.id = m.group_id
-                          WHERE m.group_id = ? AND m.user_id = ? AND m.status = 'active'`).get(groupId, userId);
+async function loadMembership(db, groupId, userId) {
+  const row = await db.get(`SELECT m.role, g.id AS group_id, g.name AS group_name, g.currency
+                            FROM memberships m JOIN groups g ON g.id = m.group_id
+                            WHERE m.group_id = ? AND m.user_id = ? AND m.status = 'active'`, [groupId, userId]);
   if (!row) throw notFound('Group not found.');
   return row;
 }

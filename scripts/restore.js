@@ -1,38 +1,34 @@
 'use strict';
 
-// Restores a backup made by scripts/backup.js. Stop the app first.
-// The current data directory is moved aside (never deleted).
+// Restores a backup made by scripts/backup.js into an EMPTY database (local or
+// Supabase, depending on the same settings the app uses). It never overwrites
+// existing data. For local data, stop the app first.
 // Usage: npm run restore -- <path-to-backup-folder>
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
 const { loadConfig } = require('../src/config');
+const { openDatabase } = require('../src/db');
+const { createFileStore } = require('../src/attachments');
+const { importData, readDump } = require('./transfer');
 
-function restore(config, backupDir) {
-  const dbFile = path.join(backupDir, 'app.db');
-  if (!fs.existsSync(dbFile)) throw new Error(`No app.db found in ${backupDir}`);
-
-  // Refuse to restore a corrupt snapshot.
-  const check = new DatabaseSync(dbFile, { readOnly: true });
+async function restore(config, backupDir, { logger = console, db, fileStore } = {}) {
+  const dump = readDump(backupDir);
+  const ownDb = !db;
+  if (ownDb) db = await openDatabase(config, logger);
   try {
-    const result = check.prepare('PRAGMA integrity_check').get();
-    if (Object.values(result)[0] !== 'ok') throw new Error('Backup database failed integrity_check');
+    if (!fileStore) {
+      fileStore = createFileStore(config);
+      await fileStore.init();
+    }
+    const readFile = (name) => {
+      const p = path.join(backupDir, 'files', path.basename(name));
+      return fs.existsSync(p) ? fs.readFileSync(p) : null;
+    };
+    return await importData(db, fileStore, dump.tables, readFile);
   } finally {
-    check.close();
+    if (ownDb) await db.close();
   }
-
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  let movedTo = null;
-  if (fs.existsSync(config.dataDir)) {
-    movedTo = `${config.dataDir}.before-restore-${stamp}`;
-    fs.renameSync(config.dataDir, movedTo);
-  }
-  fs.mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
-  fs.copyFileSync(dbFile, config.dbPath);
-  const uploads = path.join(backupDir, 'uploads');
-  if (fs.existsSync(uploads)) fs.cpSync(uploads, config.uploadDir, { recursive: true });
-  return { movedTo };
 }
 
 if (require.main === module) {
@@ -41,8 +37,9 @@ if (require.main === module) {
     console.error('Usage: npm run restore -- <path-to-backup-folder>');
     process.exit(1);
   }
-  const { movedTo } = restore(loadConfig(), path.resolve(dir));
-  console.log(`Restored from ${dir}.${movedTo ? ` Previous data kept at ${movedTo}` : ''}`);
+  restore(loadConfig(), path.resolve(dir)).then((r) => {
+    console.log(`Restored from ${dir}. Rows: ${JSON.stringify(r.counts)}; files: ${r.files}`);
+  }).catch((err) => { console.error(`Restore failed: ${err.message}`); process.exit(1); });
 }
 
 module.exports = { restore };

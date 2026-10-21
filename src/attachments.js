@@ -58,25 +58,114 @@ function createUploadMiddleware(config) {
   });
 }
 
-function createFileStore(config) {
+const STORAGE_NAME_RE = /^[a-f0-9]{48}$/;
+
+function newStorageName() {
+  return crypto.randomBytes(24).toString('hex');
+}
+
+function sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function checkName(storageName) {
+  if (!STORAGE_NAME_RE.test(storageName)) throw new Error('Invalid storage name');
+  return storageName;
+}
+
+/** Private files on the local disk (development, tests, or a host with a persistent disk). */
+function localBackend(config) {
   fs.mkdirSync(config.uploadDir, { recursive: true, mode: 0o700 });
+  const filePath = (name) => path.join(config.uploadDir, name.slice(0, 2), checkName(name));
+  return {
+    kind: 'local',
+    async init() {},
+    async put(name, buffer) {
+      const p = filePath(name);
+      fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(p, buffer, { mode: 0o600, flag: 'wx' });
+    },
+    async get(name) {
+      try { return fs.readFileSync(filePath(name)); } catch (err) {
+        if (err.code === 'ENOENT') return null;
+        throw err;
+      }
+    },
+    async remove(name) {
+      try { fs.unlinkSync(filePath(name)); } catch { /* already gone */ }
+    },
+  };
+}
 
-  function filePath(storageName) {
-    if (!/^[a-f0-9]{48}$/.test(storageName)) throw new Error('Invalid storage name');
-    return path.join(config.uploadDir, storageName.slice(0, 2), storageName);
+/**
+ * Private Supabase Storage bucket, accessed only from the server with the
+ * service-role key (never sent to browsers). Files are served through the
+ * app's own short-lived signed links, so the bucket stays private.
+ */
+function supabaseBackend(config, fetchImpl = fetch) {
+  const base = `${config.supabaseUrl}/storage/v1`;
+  const bucket = config.supabaseBucket;
+  const headers = { Authorization: `Bearer ${config.supabaseKey}`, apikey: config.supabaseKey };
+  const objectPath = (name) => `${name.slice(0, 2)}/${checkName(name)}`;
+
+  async function fail(res, what) {
+    const text = await res.text().catch(() => '');
+    // Never include headers (they hold the key) in errors.
+    throw new Error(`Supabase Storage ${what} failed: HTTP ${res.status} ${text.slice(0, 200)}`);
   }
 
-  /** Writes a buffer under a random server-generated name. */
-  function save(buffer) {
-    const storageName = crypto.randomBytes(24).toString('hex');
-    const p = filePath(storageName);
-    fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(p, buffer, { mode: 0o600, flag: 'wx' });
-    return { storageName, sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
+  return {
+    kind: 'supabase',
+    /** Creates the private bucket on first start; ignores "already exists". */
+    async init() {
+      const res = await fetchImpl(`${base}/bucket`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: bucket, name: bucket, public: false, file_size_limit: config.maxUploadBytes,
+          allowed_mime_types: Object.keys(TYPES) }),
+      });
+      if (res.ok) return;
+      const text = await res.text().catch(() => '');
+      if (res.status === 409 || /already exists|Duplicate/i.test(text)) return;
+      throw new Error(`Supabase Storage bucket setup failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+    },
+    async put(name, buffer, contentType) {
+      const res = await fetchImpl(`${base}/object/${bucket}/${objectPath(name)}`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': contentType, 'x-upsert': 'false' },
+        body: buffer,
+      });
+      if (!res.ok) await fail(res, 'upload');
+    },
+    async get(name) {
+      const res = await fetchImpl(`${base}/object/authenticated/${bucket}/${objectPath(name)}`, { headers });
+      if (res.status === 404 || res.status === 400) return null;
+      if (!res.ok) await fail(res, 'download');
+      return Buffer.from(await res.arrayBuffer());
+    },
+    async remove(name) {
+      const res = await fetchImpl(`${base}/object/${bucket}`, {
+        method: 'DELETE',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefixes: [objectPath(name)] }),
+      });
+      if (!res.ok && res.status !== 404) await fail(res, 'delete');
+    },
+  };
+}
+
+function createFileStore(config, { backend } = {}) {
+  const store = backend || (config.supabaseUrl && config.supabaseKey ? supabaseBackend(config) : localBackend(config));
+
+  /** Stores a buffer under a random server-generated name. */
+  async function save(buffer, contentType) {
+    const storageName = newStorageName();
+    await store.put(storageName, buffer, contentType);
+    return { storageName, sha256: sha256(buffer) };
   }
 
-  function discard(storageName) {
-    try { fs.unlinkSync(filePath(storageName)); } catch { /* already gone */ }
+  async function discard(storageName) {
+    try { await store.remove(storageName); } catch { /* best effort: an orphaned file is harmless */ }
   }
 
   // ---- Short-lived signed download links -----------------------------------
@@ -108,7 +197,11 @@ function createFileStore(config) {
     }
   }
 
-  return { save, discard, filePath, createDownloadToken, verifyDownloadToken };
+  return {
+    kind: store.kind, init: () => store.init(), save, discard,
+    read: (name) => store.get(name), put: (name, buffer, type) => store.put(name, buffer, type),
+    createDownloadToken, verifyDownloadToken,
+  };
 }
 
-module.exports = { createUploadMiddleware, createFileStore, validateUpload, detectType, safeDisplayName, ALLOWED_DESCRIPTION };
+module.exports = { createUploadMiddleware, createFileStore, localBackend, supabaseBackend, validateUpload, detectType, safeDisplayName, ALLOWED_DESCRIPTION };

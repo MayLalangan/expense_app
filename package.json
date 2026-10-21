@@ -4,20 +4,23 @@
   "description": "Shared expenses app: budget entries, expenses, suggested purchases, attachments, audit history and deletion approvals",
   "main": "src/server.js",
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning src/server.js",
-    "dev": "node --disable-warning=ExperimentalWarning --watch src/server.js",
+    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/server.js",
+    "dev": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env --watch src/server.js",
     "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"test/**/*.test.js\"",
     "lint": "eslint .",
     "check": "npm run lint && npm test",
-    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js",
-    "restore": "node --disable-warning=ExperimentalWarning scripts/restore.js"
+    "backup": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/backup.js",
+    "restore": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/restore.js",
+    "import-sqlite": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/import-sqlite.js"
   },
   "author": "",
   "license": "UNLICENSED",
   "type": "commonjs",
   "dependencies": {
+    "@electric-sql/pglite": "^0.5.10",
     "express": "^4.22.3",
-    "multer": "^2.4.0"
+    "multer": "^2.4.0",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

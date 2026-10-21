@@ -33,13 +33,37 @@ function loadConfig(overrides = {}) {
     downloadSecret = crypto.randomBytes(32).toString('hex');
   }
 
+  // Optional PEM certificate; "\n" escapes allow pasting it into a single-line env var.
+  const caCert = (overrides.databaseCaCert ?? env.DATABASE_CA_CERT ?? '').replace(/\\n/g, '\n').trim();
+  const databaseUrl = overrides.databaseUrl ?? (env.DATABASE_URL || null);
+  const supabaseUrl = overrides.supabaseUrl ?? (env.SUPABASE_URL || null);
+  const supabaseKey = overrides.supabaseKey ?? (env.SUPABASE_SERVICE_ROLE_KEY || null);
+  const allowLocalData = overrides.allowLocalData ?? bool(env.ALLOW_LOCAL_DATA, false);
+
+  // On hosts like Render's free tier the local disk is wiped on every restart,
+  // so production refuses to start with local-only storage unless told otherwise.
+  if (production && !allowLocalData && (!databaseUrl || !supabaseUrl || !supabaseKey)) {
+    throw new Error('Production needs DATABASE_URL, SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY '
+      + '(or ALLOW_LOCAL_DATA=true on a host with a persistent disk).');
+  }
+
   return {
     production,
     port: int(env.PORT, 3000),
     trustProxy: bool(env.TRUST_PROXY, false),
     dataDir,
-    dbPath: overrides.dbPath || path.join(dataDir, 'app.db'),
+    databaseUrl,
+    databaseCaCert: caCert || null,
+    databaseSsl: overrides.databaseSsl ?? bool(env.DATABASE_SSL, true),
+    databasePoolSize: int(env.DATABASE_POOL_SIZE, 5),
+    // Local Postgres (PGlite) used when DATABASE_URL is not set.
+    pgliteDir: overrides.pgliteDir || path.join(dataDir, 'pgdata'),
+    supabaseUrl: supabaseUrl ? supabaseUrl.replace(/\/+$/, '') : null,
+    supabaseKey,
+    supabaseBucket: overrides.supabaseBucket || env.SUPABASE_BUCKET || 'receipts',
     uploadDir: overrides.uploadDir || path.join(dataDir, 'uploads'),
+    // Legacy SQLite file from before the move to Postgres (read by the import script).
+    legacySqlitePath: path.join(dataDir, 'app.db'),
     secureCookies: overrides.secureCookies ?? bool(env.COOKIE_SECURE, production),
     sessionTtlHours: int(env.SESSION_TTL_HOURS, 24 * 7),
     sessionIdleHours: int(env.SESSION_IDLE_HOURS, 48),

@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -9,11 +10,49 @@ const { createApp } = require('../src/app');
 
 const silentLogger = { info() {}, error() {}, warn() {} };
 
-function makeApp(overrides = {}) {
+/**
+ * With TEST_DATABASE_URL set (e.g. postgres://postgres@localhost:5432/postgres),
+ * each app gets its own freshly created database on that real Postgres server,
+ * exercising the production `pg` driver. Otherwise an in-memory PGlite is used.
+ */
+async function createTestDatabase() {
+  const adminUrl = process.env.TEST_DATABASE_URL;
+  if (!adminUrl) return { databaseUrl: null, drop: async () => {} };
+  const { Client } = require('pg');
+  const name = `expenses_test_${crypto.randomBytes(6).toString('hex')}`;
+  const admin = new Client({ connectionString: adminUrl });
+  await admin.connect();
+  await admin.query(`CREATE DATABASE ${name}`);
+  await admin.end();
+  const url = new URL(adminUrl);
+  url.pathname = `/${name}`;
+  return {
+    databaseUrl: url.toString(),
+    drop: async () => {
+      const c = new Client({ connectionString: adminUrl });
+      await c.connect();
+      await c.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+      await c.end();
+    },
+  };
+}
+
+/** A fresh app with an empty database and files in a temp dir. */
+async function makeApp(overrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'expenses-test-'));
-  const config = { ...loadConfig({ dataDir: dir, logRequests: false, rateLimit: { windowMs: 60000, max: 1000 } }), ...overrides };
-  const app = createApp(config, { logger: silentLogger });
-  return { app, db: app.locals.db, config, dir, cleanup: () => { try { app.locals.db.close(); } catch { /* already closed */ } fs.rmSync(dir, { recursive: true, force: true }); } };
+  const testDb = await createTestDatabase();
+  const base = loadConfig({
+    dataDir: dir, pgliteDir: 'memory://', databaseUrl: testDb.databaseUrl, databaseSsl: false,
+    supabaseUrl: null, supabaseKey: null, logRequests: false, rateLimit: { windowMs: 60000, max: 1000 },
+  });
+  const config = { ...base, ...overrides };
+  const app = await createApp(config, { logger: silentLogger });
+  const cleanup = async () => {
+    try { await app.locals.db.close(); } catch { /* already closed */ }
+    await testDb.drop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  };
+  return { app, db: app.locals.db, config, dir, cleanup };
 }
 
 /** Signs up a user and returns a small client that sends the CSRF token automatically. */

@@ -18,7 +18,7 @@ test('role matrix', () => {
 });
 
 test('group isolation and role enforcement on the server', async (t) => {
-  const { app, cleanup } = makeApp();
+  const { app, cleanup } = await makeApp();
   t.after(cleanup);
   const admin = await signUp(app, 'Admin');
   const editor = await signUp(app, 'Editor');
@@ -72,7 +72,7 @@ test('group isolation and role enforcement on the server', async (t) => {
 });
 
 test('invitation links are single-use and expire', async (t) => {
-  const { app, db, cleanup } = makeApp();
+  const { app, db, cleanup } = await makeApp();
   t.after(cleanup);
   const admin = await signUp(app, 'Admin');
   const joiner = await signUp(app, 'Joiner');
@@ -83,7 +83,7 @@ test('invitation links are single-use and expire', async (t) => {
   assert.equal(inv.status, 201);
   const { token } = inv.body.invitation;
   // Only a hash of the token is stored.
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM invitations WHERE token_hash = ?').get(token).n, 0);
+  assert.equal((await db.get('SELECT COUNT(*) AS n FROM invitations WHERE token_hash = ?', [token])).n, 0);
 
   const preview = await joiner.get(`/api/invitations/${token}`);
   assert.equal(preview.body.invitation.role, 'approver');
@@ -93,7 +93,7 @@ test('invitation links are single-use and expire', async (t) => {
   assert.equal((await late.post(`/api/invitations/${token}/accept`)).status, 404);
 
   const expired = await admin.post(`/api/groups/${gid}/invitations`, { role: 'viewer' });
-  db.prepare(`UPDATE invitations SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id = ?`).run(expired.body.invitation.id);
+  (await db.run(`UPDATE invitations SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id = ?`, [expired.body.invitation.id]));
   assert.equal((await late.post(`/api/invitations/${expired.body.invitation.token}/accept`)).status, 404);
 
   const revoked = await admin.post(`/api/groups/${gid}/invitations`, { role: 'viewer' });

@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const { makeApp, signUp, makeGroup, PNG, JPG, PDF } = require('./helpers');
 
 test('attachments: validation, storage, authorized delivery, history', async (t) => {
-  const { app, db, config, cleanup } = makeApp();
+  const { app, db, config, cleanup } = await makeApp();
   t.after(cleanup);
   const alice = await signUp(app, 'Alice');
   const bob = await signUp(app, 'Bob');
@@ -24,7 +24,7 @@ test('attachments: validation, storage, authorized delivery, history', async (t)
     assert.equal(r.body.attachments.length, 3);
     assert.equal(r.body.attachments[2].name, 'invoice.pdf');
     pngId = r.body.attachments[0].id;
-    const rows = db.prepare('SELECT * FROM attachments WHERE record_id = ?').all(exp.id);
+    const rows = (await db.all('SELECT * FROM attachments WHERE record_id = ?', [exp.id]));
     for (const row of rows) {
       assert.match(row.storage_name, /^[a-f0-9]{48}$/);
       assert.equal(row.uploaded_by, alice.user.id);
@@ -97,7 +97,7 @@ test('attachments: validation, storage, authorized delivery, history', async (t)
     const actions = detail.history.map((h) => h.action);
     assert.ok(actions.includes('attachment_added') && actions.includes('attachment_replaced') && actions.includes('attachment_removed'));
     // History never contains storage names.
-    assert.ok(!JSON.stringify(detail).includes(db.prepare('SELECT storage_name FROM attachments WHERE id = ?').get(pngId).storage_name));
+    assert.ok(!JSON.stringify(detail).includes((await db.get('SELECT storage_name FROM attachments WHERE id = ?', [pngId])).storage_name));
 
     // Removed files remain downloadable for history.
     const link = await alice.get(`${U}/${pngId}/link`);

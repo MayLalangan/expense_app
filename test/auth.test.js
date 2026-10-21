@@ -6,7 +6,7 @@ const request = require('supertest');
 const { makeApp, signUp } = require('./helpers');
 
 test('sign-up, sign-in, sign-out and session lifecycle', async (t) => {
-  const { app, db, cleanup } = makeApp();
+  const { app, db, cleanup } = await makeApp();
   t.after(cleanup);
 
   const alice = await signUp(app, 'Alice Smith', 'correct horse battery');
@@ -16,7 +16,7 @@ test('sign-up, sign-in, sign-out and session lifecycle', async (t) => {
   assert.match(cookie, /SameSite=Lax/);
 
   // Password is stored hashed.
-  const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(alice.user.id);
+  const row = (await db.get('SELECT password_hash FROM users WHERE id = ?', [alice.user.id]));
   assert.match(row.password_hash, /^scrypt\$/);
   assert.ok(!row.password_hash.includes('correct horse'));
 
@@ -65,7 +65,7 @@ test('sign-up, sign-in, sign-out and session lifecycle', async (t) => {
 
   await t.test('expired sessions are rejected with a clear message', async () => {
     const bob = await signUp(app, 'Bob');
-    db.prepare(`UPDATE sessions SET expires_at = '2000-01-01T00:00:00.000Z' WHERE user_id = ?`).run(bob.user.id);
+    (await db.run(`UPDATE sessions SET expires_at = '2000-01-01T00:00:00.000Z' WHERE user_id = ?`, [bob.user.id]));
     const r = await bob.get('/api/groups');
     assert.equal(r.status, 401);
     assert.match(r.body.error, /expired/);
@@ -73,7 +73,7 @@ test('sign-up, sign-in, sign-out and session lifecycle', async (t) => {
 
   await t.test('idle sessions expire', async () => {
     const carol = await signUp(app, 'Carol');
-    db.prepare(`UPDATE sessions SET last_seen_at = '2000-01-01T00:00:00.000Z' WHERE user_id = ?`).run(carol.user.id);
+    (await db.run(`UPDATE sessions SET last_seen_at = '2000-01-01T00:00:00.000Z' WHERE user_id = ?`, [carol.user.id]));
     assert.equal((await carol.get('/api/groups')).status, 401);
   });
 
@@ -85,7 +85,7 @@ test('sign-up, sign-in, sign-out and session lifecycle', async (t) => {
 });
 
 test('sign-in is rate limited', async (t) => {
-  const { app, cleanup } = makeApp({ rateLimit: { windowMs: 60000, max: 3 } });
+  const { app, cleanup } = await makeApp({ rateLimit: { windowMs: 60000, max: 3 } });
   t.after(cleanup);
   const statuses = [];
   for (let i = 0; i < 5; i++) {
@@ -95,7 +95,7 @@ test('sign-in is rate limited', async (t) => {
 });
 
 test('security headers are set', async (t) => {
-  const { app, cleanup } = makeApp();
+  const { app, cleanup } = await makeApp();
   t.after(cleanup);
   const r = await request(app).get('/');
   assert.match(r.headers['content-security-policy'], /default-src 'self'/);

@@ -1,40 +1,38 @@
 'use strict';
 
-// Creates a consistent snapshot of the database (VACUUM INTO works while the
-// app is running) plus a copy of all uploaded files.
+// Copies the whole database and all receipts to a folder on this computer.
+// Uses the same settings as the app: with DATABASE_URL / SUPABASE_* set (for
+// example in a local .env file) it backs up the live Supabase data; otherwise
+// the local development data.
 // Usage: npm run backup [-- <backup-root>]   (default: ./backups)
 
-const fs = require('node:fs');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
 const { loadConfig, ROOT } = require('../src/config');
+const { openDatabase } = require('../src/db');
+const { createFileStore } = require('../src/attachments');
+const { exportData } = require('./transfer');
 
-function backup(config, backupRoot) {
+/** `db`/`fileStore` may be passed in (tests, or a running app); otherwise they are opened from config. */
+async function backup(config, backupRoot, { logger = console, db, fileStore } = {}) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const dest = path.join(backupRoot, `backup-${stamp}`);
-  fs.mkdirSync(dest, { recursive: true, mode: 0o700 });
-
-  const db = new DatabaseSync(config.dbPath, { readOnly: true });
+  const ownDb = !db;
+  if (ownDb) db = await openDatabase(config, logger);
   try {
-    db.prepare('VACUUM INTO ?').run(path.join(dest, 'app.db'));
+    const manifest = await exportData(db, fileStore || createFileStore(config), dest);
+    return { dest, manifest };
   } finally {
-    db.close();
+    if (ownDb) await db.close();
   }
-  if (fs.existsSync(config.uploadDir)) {
-    fs.cpSync(config.uploadDir, path.join(dest, 'uploads'), { recursive: true });
-  }
-  const files = fs.existsSync(path.join(dest, 'uploads'))
-    ? fs.readdirSync(path.join(dest, 'uploads'), { recursive: true }).filter((f) => /[a-f0-9]{48}$/.test(f)).length
-    : 0;
-  fs.writeFileSync(path.join(dest, 'manifest.json'), JSON.stringify({ createdAt: new Date().toISOString(), files }, null, 2));
-  return dest;
 }
 
 if (require.main === module) {
-  const config = loadConfig();
   const root = path.resolve(process.argv[2] || path.join(ROOT, 'backups'));
-  const dest = backup(config, root);
-  console.log(`Backup written to ${dest}`);
+  backup(loadConfig(), root).then(({ dest, manifest }) => {
+    console.log(`Backup written to ${dest}`);
+    console.log(`Rows: ${JSON.stringify(manifest.counts)}; files: ${manifest.files}`);
+    if (manifest.missing.length) console.warn(`Warning: ${manifest.missing.length} attachment file(s) were missing from storage.`);
+  }).catch((err) => { console.error(`Backup failed: ${err.message}`); process.exit(1); });
 }
 
 module.exports = { backup };
