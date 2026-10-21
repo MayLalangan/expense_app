@@ -5,7 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { openDatabase, MIGRATIONS, toPositional } = require('../src/db');
+const { openDatabase, MIGRATIONS, toPositional, parseDatabaseUrl } = require('../src/db');
+const { clean } = require('../src/config');
 
 const config = (pgliteDir) => ({ databaseUrl: null, pgliteDir });
 
@@ -66,4 +67,31 @@ test('placeholder conversion skips literals, identifiers, comments and dollar qu
     , $fn$ ? $fn$, ?`), `SELECT $1 , '?', "a?" -- what?
     , $fn$ ? $fn$, $2`);
   assert.equal(toPositional(`details::jsonb #>> '{a,b}' = ? AND x = ?`), `details::jsonb #>> '{a,b}' = $1 AND x = $2`);
+});
+
+test('DATABASE_URL problems are explained without revealing the password', () => {
+  const ok = parseDatabaseUrl('postgresql://postgres.abc:S3cretPass@aws-1-eu-central-1.pooler.supabase.com:5432/postgres');
+  assert.equal(ok.hostname, 'aws-1-eu-central-1.pooler.supabase.com');
+  assert.ok(parseDatabaseUrl('postgresql://postgres.abc:p%23ss@host.example:5432/postgres')); // encoded # is fine
+  const cases = {
+    'postgresql://postgres.abc:pa#ss@host.example:5432/postgres': /special characters/,
+    'postgresql://postgres.abc:[YOUR-PASSWORD]@host.example:5432/postgres': /brackets/,
+    'postgresql://postgres.abc@host.example:5432/postgres': /password is missing/,
+    'postgresql://postgres.abc:postgresql://postgres.abc:pw@h.example:5432/postgres': /more than once/,
+    'host.example:5432/postgres': /must start with postgresql/,
+    'postgresql://postgres.abc:pw @host.example:5432/postgres': /spaces/,
+  };
+  for (const [raw, expected] of Object.entries(cases)) {
+    assert.throws(() => parseDatabaseUrl(raw), (err) => {
+      assert.match(err.message, expected);
+      assert.ok(!err.message.includes(raw), 'the message must never echo the value (it holds the password)');
+      return true;
+    });
+  }
+});
+
+test('config strips quotes and whitespace pasted around values', () => {
+  assert.equal(clean('  "postgresql://u:p@h/db"\n'), 'postgresql://u:p@h/db');
+  assert.equal(clean("'https://x.supabase.co'"), 'https://x.supabase.co');
+  assert.equal(clean('   '), null);
 });

@@ -158,8 +158,9 @@ with a persistent disk).
 ### 1. Supabase (database + receipts)
 
 1. Create a free account at supabase.com → **New project**. Pick a strong
-   database password and a region near your users (e.g. Southeast Asia
-   (Singapore)); keep it the same as Render's region.
+   database password and a region. Render's `region` in `render.yaml` must
+   match it (this project: Supabase Central EU `eu-central-1` ↔ Render
+   `frankfurt`), because every page makes several database round trips.
 2. **Connect** (top bar) → **Session pooler** → copy the URI and put your
    database password into it. This is `DATABASE_URL`. (Use the pooler, not the
    "Direct connection": Render can't reach Supabase's IPv6-only direct address.)

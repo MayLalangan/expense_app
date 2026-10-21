@@ -345,11 +345,39 @@ function sslOptions(config) {
   return { rejectUnauthorized: false };
 }
 
+/**
+ * Parses DATABASE_URL, or explains what is wrong with it without ever
+ * printing the value (it contains the database password).
+ */
+function parseDatabaseUrl(raw) {
+  const problems = [];
+  if (!/^postgres(ql)?:\/\//.test(raw)) problems.push('it must start with postgresql://');
+  if (/\s/.test(raw)) problems.push('it contains spaces or line breaks');
+  if (/\[|\]/.test(raw)) problems.push('it still contains [ ] brackets (replace [YOUR-PASSWORD] with the password itself, without brackets)');
+  if ((raw.match(/postgres(ql)?:\/\//g) || []).length > 1) problems.push('the connection string appears more than once (pasted twice?)');
+  const at = raw.lastIndexOf('@');
+  const userInfo = at > 0 ? raw.slice(raw.indexOf('//') + 2, at) : '';
+  const password = userInfo.includes(':') ? userInfo.slice(userInfo.indexOf(':') + 1) : '';
+  if (at < 0) problems.push('the "@host" part is missing');
+  else if (!password) problems.push('the password is missing (expected postgresql://USER:PASSWORD@HOST:5432/postgres)');
+  else if (/[#/?@:%\s]/.test(password) && !/%[0-9A-Fa-f]{2}/.test(password)) {
+    problems.push('the password contains special characters (# / ? @ : %) that must be URL-encoded, e.g. # → %23, / → %2F, ? → %3F, @ → %40 — or reset the database password in Supabase to one with only letters and digits');
+  }
+  let url;
+  try { url = new URL(raw); } catch { /* reported below */ }
+  if (url && !url.hostname) problems.push('no host name could be read');
+  if (!url || problems.length) {
+    throw new Error(`DATABASE_URL is not valid: ${problems.length ? problems.join('; ') : 'it could not be parsed as a URL'}. `
+      + 'Expected: postgresql://postgres.PROJECT:PASSWORD@aws-…pooler.supabase.com:5432/postgres');
+  }
+  return url;
+}
+
 function pgDriver(config, logger) {
   const pg = require('pg');
   for (const [oid, fn] of Object.entries(TYPE_PARSERS)) pg.types.setTypeParser(Number(oid), fn);
   // sslmode in the URL would override our explicit SSL settings, so drop it.
-  const url = new URL(config.databaseUrl);
+  const url = parseDatabaseUrl(config.databaseUrl);
   url.searchParams.delete('sslmode');
   const ssl = sslOptions(config);
   if (ssl && !ssl.ca) logger.warn('DATABASE_CA_CERT not set: the database connection is encrypted but the server certificate is not verified.');
@@ -408,4 +436,4 @@ function isConstraintError(err) {
   return typeof err?.code === 'string' && err.code.startsWith('23');
 }
 
-module.exports = { openDatabase, Database, MIGRATIONS, TABLES, toPositional, isConstraintError };
+module.exports = { openDatabase, Database, MIGRATIONS, TABLES, toPositional, isConstraintError, parseDatabaseUrl };

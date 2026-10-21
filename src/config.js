@@ -10,6 +10,13 @@ function bool(value, fallback) {
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 }
 
+/** Trims whitespace and one pair of wrapping quotes, a common copy-paste slip in hosting dashboards. */
+function clean(value) {
+  if (typeof value !== 'string') return value ?? null;
+  const v = value.trim().replace(/^(['"])(.*)\1$/s, '$2').trim();
+  return v || null;
+}
+
 function int(value, fallback) {
   const n = Number.parseInt(value, 10);
   return Number.isFinite(n) ? n : fallback;
@@ -35,9 +42,9 @@ function loadConfig(overrides = {}) {
 
   // Optional PEM certificate; "\n" escapes allow pasting it into a single-line env var.
   const caCert = (overrides.databaseCaCert ?? env.DATABASE_CA_CERT ?? '').replace(/\\n/g, '\n').trim();
-  const databaseUrl = overrides.databaseUrl ?? (env.DATABASE_URL || null);
-  const supabaseUrl = overrides.supabaseUrl ?? (env.SUPABASE_URL || null);
-  const supabaseKey = overrides.supabaseKey ?? (env.SUPABASE_SERVICE_ROLE_KEY || null);
+  const databaseUrl = overrides.databaseUrl !== undefined ? overrides.databaseUrl : clean(env.DATABASE_URL);
+  const supabaseUrl = overrides.supabaseUrl !== undefined ? overrides.supabaseUrl : clean(env.SUPABASE_URL);
+  const supabaseKey = overrides.supabaseKey !== undefined ? overrides.supabaseKey : clean(env.SUPABASE_SERVICE_ROLE_KEY);
   const allowLocalData = overrides.allowLocalData ?? bool(env.ALLOW_LOCAL_DATA, false);
 
   // On hosts like Render's free tier the local disk is wiped on every restart,
@@ -80,4 +87,4 @@ function loadConfig(overrides = {}) {
   };
 }
 
-module.exports = { loadConfig, ROOT };
+module.exports = { loadConfig, ROOT, clean };

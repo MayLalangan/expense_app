@@ -5,7 +5,7 @@ services:
     name: expense-app
     runtime: node
     plan: free
-    region: singapore
+    region: frankfurt  # same region as the Supabase project (eu-central-1)
     branch: main
     buildCommand: npm ci --omit=dev
     startCommand: npm start
